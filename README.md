@@ -72,7 +72,21 @@ verify → residual along the targeted direction: 85.3% removed, fidelity 0.85 (
 mlx-lm → the patched 15 GB checkpoint loads and generates (`def fibonacci(n)` unchanged at temp 0)
 ```
 
-39 unit tests, including a full agent episode end-to-end against a scripted model.
+43 unit tests, including a full agent episode end-to-end against a scripted model.
+
+### First run (base vs one weight edit)
+
+Three graded tasks, 12-step cap, both conditions served by the same `mlx-lm` binary:
+
+```
+base     2/3  [0.21, 0.94]   patched  2/3  [0.21, 0.94]      not distinguishable at n=3
+```
+
+The edit **is** behaviourally active — 3/5 greedy prompts identical, `fibonacci` and a prose
+opening change, the arithmetic answer does not — but it buys nothing on this suite, and **no
+failure probe fired in either condition**, so the WSP loop had no target. That is the paper's
+Gemma-270M control, not its Qwen-0.8B result. Details and the failure analysis:
+[`docs/04-results.md`](docs/04-results.md).
 
 ---
 
@@ -129,6 +143,7 @@ docs/
   01-feasibility.md the arithmetic, the critique, and the bounded goal
   02-method.md      the iteration protocol and acceptance criteria
   03-runbook.md     commands, timings, gotchas
+  04-results.md     first base-vs-patched run, and why it is a null result
 ```
 
 ## Honest limitations

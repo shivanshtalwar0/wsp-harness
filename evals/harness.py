@@ -275,7 +275,7 @@ def run_task(task: Task, client, workdir: Path, max_steps: int | None = None,
 
 def run_suite(tasks: list[Task], client, out_path: str | Path, max_steps: int | None = None,
               workdir: str | Path | None = None) -> dict:
-    from .probes import detect, rank
+    from wsp.probes import detect, rank
 
     workdir = Path(workdir or tempfile.mkdtemp(prefix="wsp-runs-"))
     workdir.mkdir(parents=True, exist_ok=True)

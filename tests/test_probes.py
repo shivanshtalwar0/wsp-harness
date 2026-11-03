@@ -46,3 +46,10 @@ def test_rank_orders_by_prevalence():
     assert out["ranked"][0]["probe"] == "reasoning_loop"
     assert out["ranked"][0]["prevalence"] > 0.5
     assert "reasoning_loop" in out["weight_candidates"]
+
+
+def test_detects_empty_write():
+    steps = [{"assistant": "x", "tool": "write_file",
+              "tool_input": {"path": "a.py", "content": ""}, "observation": "[wrote 0 bytes]"}]
+    r = detect(ep(steps=steps))
+    assert any(f["probe"] == "empty_write" for f in r["findings"])

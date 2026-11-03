@@ -74,6 +74,30 @@ LMSTUDIO_TIMEOUT=900 llm -f <prompt-url> -m lmstudio/qwen/qwen3.8-27b
 
 Our harness has its own 900 s request timeout and 3 attempts.
 
+## Serving a patched checkpoint
+
+`mlx-lm` is the right server for experiments: one binary, so base and patched differ only in
+weights.
+
+```bash
+python -m mlx_lm server --model "$M" --port 8101 --host 127.0.0.1 --log-level WARNING
+```
+
+**The `model` field in a request must be exactly the `--model` path you passed.** The server
+treats an unknown id as a Hugging Face repo and returns a confusing `404 ... Repository Not Found
+for url: https://huggingface.co/api/models/<id>`. Take the id from `curl /v1/models`.
+
+Also: `mlx_lm` ignores `--max-tokens` from the command line in favour of the request's value, and
+a thinking model can spend the entire budget on reasoning and return an empty `content`. If
+outputs look empty, raise `--max-tokens` before assuming the weights are broken.
+
+## Memory and disk
+
+A single 27B at 4-bit is ~15 GB of unified memory. `wsp apply` writes another 15 GB. Doing both at
+once pushed this laptop to 16 GB of swap, 4.9 GB free disk, and 10-minute turns. Run one heavy job
+at a time and check `df -h .` before `apply`; a patched copy can always be regenerated in ~31 s
+from a few-hundred-KB patch file.
+
 ## Eval
 
 ```bash

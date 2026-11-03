@@ -63,3 +63,19 @@ def test_broken_tool_call_is_reported_not_fatal(tmp_path):
     ep = harness.run_task(task, mock.ScriptedModel(['<tool name="read_file">{bad}</tool>', mock.SUBMIT]), tmp_path)
     assert ep["steps"][0].get("parse_error") is True
     assert ep["resolved"] is False
+
+
+def test_run_suite_end_to_end(tmp_path):
+    task = harness.Task.load(TASKS / "01-bugfix-off-by-one")
+    client = mock.ScriptedModel([
+        mock.read("textkit/paginate.py"),
+        mock.write("textkit/paginate.py", FIXED),
+        mock.shell("python -m pytest -q"),
+        mock.SUBMIT,
+    ])
+    out = tmp_path / "suite.json"
+    summary = harness.run_suite([task], client, out, workdir=tmp_path / "wd")
+    assert summary["n"] == 1 and summary["resolved"] == 1
+    saved = json.loads(out.read_text())
+    assert saved["episodes"][0]["resolved"] is True
+    assert saved["summary"]["probes"]["n_episodes"] == 1

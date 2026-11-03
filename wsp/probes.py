@@ -85,6 +85,14 @@ def detect(episode: dict) -> dict:
         findings.append(Finding("edit_without_read", len(blind), "medium", "weights",
                                 "wrote files it never read; impulsive edit tendency"))
 
+    # 5b. writing an empty file: the tool call parsed, but the payload did not
+    empty = [p for p, content in _writes(steps) if p and not content.strip()]
+    if empty:
+        findings.append(Finding("empty_write", len(empty), "high", "weights",
+                                "wrote 0 bytes; the tool call was emitted but its payload was "
+                                "truncated or never generated -- usually a token-budget artifact, "
+                                "so check finish_reason before blaming the weights"))
+
     # 6. rewriting the same file over and over
     by_path = defaultdict(set)
     for p, content in _writes(steps):
