@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weight-space-programming"
+version = "0.1.0"
+description = "Weight-Space Programming experiments on a 4-bit 27B coding agent"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "safetensors>=0.4", "ml_dtypes>=0.4", "pyyaml>=6"]
+
+[project.optional-dependencies]
+verify = ["mlx"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+wsp = "wsp.cli:main"
+
+[tool.setuptools]
+packages = ["wsp", "evals"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["slow: full agent episode, spawns pytest in a subprocess"]

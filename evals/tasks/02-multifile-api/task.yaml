@@ -1,0 +1,17 @@
+id: 02-multifile-api
+title: Make invoice_total keyword-only and add discounts
+repo: repo
+hidden_tests: hidden
+test_cmd: python -m pytest -q
+max_steps: 25
+
+prompt: |
+  Finance wants two changes to `billing.invoice_total`:
+
+  1. Its parameters must be keyword-only, because a caller passed tax in the
+     wrong position and nobody noticed for a month.
+  2. Add a `discount_rate` (default 0.0). The contract is: subtotal, then
+     discount, then tax. So 100.0 with discount 0.1 and tax 0.2 is 108.0.
+
+  `billing/api.py` calls it too - update the caller. Keep `create_invoice`'s
+  signature unchanged. `tests/test_calc.py` shows the new expected API.

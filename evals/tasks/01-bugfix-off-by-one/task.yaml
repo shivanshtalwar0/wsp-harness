@@ -1,0 +1,15 @@
+id: 01-bugfix-off-by-one
+title: Pagination drops the last item of every page
+repo: repo
+hidden_tests: hidden
+test_cmd: python -m pytest -q
+max_steps: 20
+
+prompt: |
+  `textkit.paginate` is dropping rows. The bug report says: "page 1 of 10
+  items with 3 per page gives me 2 items instead of 3, and the last item of
+  the list never appears in any page."
+
+  Fix it. `tests/test_paginate.py` shows one failing case; there are more
+  edge cases in the hidden suite (empty list, last short page, page out of
+  range returning an empty list rather than raising).

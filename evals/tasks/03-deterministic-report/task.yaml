@@ -1,0 +1,15 @@
+id: 03-deterministic-report
+title: Team report sorts totals as strings
+repo: repo
+hidden_tests: hidden
+test_cmd: python -m pytest -q
+max_steps: 20
+
+prompt: |
+  `reports.summarize` is meant to return one row per team, sorted by total
+  spend, highest first, with ties broken by team name ascending.
+
+  Right now the ordering is wrong: `{"total": 9}` sorts above `{"total": 10}`.
+  Fix the ordering. `tests/test_summarize.py` has a failing case; the hidden
+  suite also checks tie-breaking and that repeated calls return an identical
+  list.
