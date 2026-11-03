@@ -1,0 +1,412 @@
+{
+  "summary": {
+    "n": 3,
+    "resolved": 2,
+    "rate": 0.667,
+    "probes": {
+      "n_episodes": 3,
+      "n_unresolved": 1,
+      "ranked": [],
+      "weight_candidates": []
+    },
+    "episodes": [
+      {
+        "task_id": "01-bugfix-off-by-one",
+        "resolved": true,
+        "submitted": true,
+        "test_output": ".......                                                                  [100%]\n7 passed in 0.04s\n",
+        "workspace": null,
+        "n_steps": 9,
+        "seconds": 108.6
+      },
+      {
+        "task_id": "02-multifile-api",
+        "resolved": false,
+        "submitted": false,
+        "test_output": "\n==================================== ERRORS ====================================\n_____________________ ERROR collecting tests/test_calc.py ______________________\nImportError while importing test module '/private/var/folders/px/r2rzqr_n57x7ldc460wdpk540000gn/T/wsp-runs-57whphxr/02-multifile-api-y0zfa78e/tests/test_calc.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/Users/shivanshtalwar/.pyenv/versions/3.10.20/lib/python3.10/importlib/__init__.py:126: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\ntests/test_calc.py:3: in <module>\n    from billing import create_invoice, invoice_total\nbilling/__init__.py:1: in <module>\n    from .api import create_invoice\nbilling/api.py:1: in <module>\n    from .calc import invoice_total\nE   ImportError: cannot import name 'invoice_total' from 'billing.calc' (/private/var/folders/px/r2rzqr_n57x7ldc460wdpk540000gn/T/wsp-runs-57whphxr/02-multifile-api-y0zfa78e/billing/calc.py)\n=========================== short test summary info ============================\nERROR tests/test_calc.py\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.26s\n",
+        "workspace": null,
+        "n_steps": 12,
+        "seconds": 107.5
+      },
+      {
+        "task_id": "03-deterministic-report",
+        "resolved": true,
+        "submitted": true,
+        "test_output": ".......                                                                  [100%]\n7 passed in 0.05s\n",
+        "workspace": null,
+        "n_steps": 12,
+        "seconds": 208.3
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 28877,
+      "completion_tokens": 3194,
+      "calls": 33
+    }
+  },
+  "episodes": [
+    {
+      "task_id": "01-bugfix-off-by-one",
+      "resolved": true,
+      "submitted": true,
+      "steps": [
+        {
+          "index": 0,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \".\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "."
+          },
+          "observation": "conftest.py\ntests/\ntextkit/",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"textkit\"}</tool>\n\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "textkit"
+          },
+          "observation": "__init__.py\npaginate.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 2,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"textkit/paginate.py\"}</tool>\n\n<tool name=\"read_file\">{\"path\": \"tests/test_paginate.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "textkit/paginate.py"
+          },
+          "observation": "def paginate(items, page, per_page=10):\n    \"\"\"Return the items on ``page`` (0-indexed), ``per_page`` of them.\"\"\"\n    start = page * per_page\n    return items[start : start + per_page - 1]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 3,
+          "assistant": "\n\nThe bug is operator precedence: `start + per_page - 1` evaluates as `start + (per_page - 1)`, so each page is one item short. Fixing the slice:\n\n<tool name=\"write_file\">{\"path\": \"textkit/paginate.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "textkit/paginate.py"
+          },
+          "observation": "[wrote 0 bytes to textkit/paginate.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 4,
+          "assistant": "\n\nThat wrote an empty file \u2014 let me write the corrected implementation:\n\n<tool name=\"write_file\">{\"path\": \"textkit/paginate.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "textkit/paginate.py"
+          },
+          "observation": "[wrote 0 bytes to textkit/paginate.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 5,
+          "assistant": "\n\nI need to include the content parameter:\n\n<tool name=\"write_file\">{\"path\": \"textkit/paginate.py\", \"content\": \"def paginate(items, page, per_page=10):\\n    \\\"\\\"\\\"Return the items on ``page`` (0-indexed), ``per_page`` of them.\\\"\\\"\\\"\\n    start = page * per_page\\n    return items[start : start + per_page]\\n\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "textkit/paginate.py",
+            "content": "def paginate(items, page, per_page=10):\n    \"\"\"Return the items on ``page`` (0-indexed), ``per_page`` of them.\"\"\"\n    start = page * per_page\n    return items[start : start + per_page]\n"
+          },
+          "observation": "[wrote 185 bytes to textkit/paginate.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 6,
+          "assistant": "\n\nSlicing handles all the edge cases naturally: out-of-range start returns `[]` (no raise), short final page returns the remainder, empty list returns `[]`. Running tests:\n\n<tool name=\"shell\">{\"cmd\": \"python -m pytest -q\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -m pytest -q"
+          },
+          "observation": "[exit 0]\n..                                                                       [100%]\n2 passed in 0.01s\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 7,
+          "assistant": "\n\nLet me quickly verify the edge cases from the hidden suite:\n\n<tool name=\"shell\">{\"cmd\": \"python -c \\\"\\nfrom textkit.paginate import paginate\\nitems = list(range(10))\\nassert paginate(items, 0, 3) == [0,1,2]\\nassert paginate(items, 1, 3) == [3,4,5]\\nassert paginate(items, 2, 3) == [6,7,8]\\nassert paginate(items, 3, 3) == [9]\\nassert paginate([], 0) == []\\nassert paginate(items, 99) == []\\nassert paginate(items, -1) == []\\nprint('ok')\\n\\\"\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -c \"\nfrom textkit.paginate import paginate\nitems = list(range(10))\nassert paginate(items, 0, 3) == [0,1,2]\nassert paginate(items, 1, 3) == [3,4,5]\nassert paginate(items, 2, 3) == [6,7,8]\nassert paginate(items, 3, 3) == [9]\nassert paginate([], 0) == []\nassert paginate(items, 99) == []\nassert paginate(items, -1) == []\nprint('ok')\n\""
+          },
+          "observation": "[exit 0]\nok\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 8,
+          "assistant": "\n\nAll cases pass: page 1 of 10 items with 3/page now gives 3 items, the last item appears, and empty/out-of-range return `[]` without raising. Submitting:\n\n<tool name=\"submit\">{\"content\": \"Fixed textkit/paginate.py: the slice used `items[start : start + per_page - 1]`, which due to operator precedence is `start + (per_page - 1)`, dropping one item per page (and thus the final item). Changed to `items[start : start + per_page]`. Python slicing also safely handles empty lists and out-of-range pages by returning an empty list.\"}</tool>",
+          "tool": "submit",
+          "tool_input": {
+            "content": "Fixed textkit/paginate.py: the slice used `items[start : start + per_page - 1]`, which due to operator precedence is `start + (per_page - 1)`, dropping one item per page (and thus the final item). Changed to `items[start : start + per_page]`. Python slicing also safely handles empty lists and out-of-range pages by returning an empty list."
+          },
+          "observation": "[submitted]",
+          "finish_reason": "stop"
+        }
+      ],
+      "test_output": ".......                                                                  [100%]\n7 passed in 0.04s\n",
+      "workspace": null,
+      "n_steps": 9,
+      "seconds": 108.6
+    },
+    {
+      "task_id": "02-multifile-api",
+      "resolved": false,
+      "submitted": false,
+      "steps": [
+        {
+          "index": 0,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": ""
+          },
+          "observation": "billing/\nconftest.py\ntests/",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"billing\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "billing"
+          },
+          "observation": "__init__.py\napi.py\ncalc.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 2,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"billing/calc.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"billing/api.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"billing/__init__.py\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "\"\"\"Invoice maths.\"\"\"\n\n\ndef invoice_total(items, tax):\n    \"\"\"Total for ``items`` (dicts with an ``amount``) including ``tax``.\"\"\"\n    subtotal = sum(item[\"amount\"] for item in items)\n    return round(subtotal * (1 + tax), 2)\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 3,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"billing/api.py\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/api.py"
+          },
+          "observation": "from .calc import invoice_total\n\n\ndef create_invoice(items, region=\"US\"):\n    \"\"\"Build a simple invoice dict for a region.\"\"\"\n    tax = 0.2 if region == \"UK\" else 0.0\n    return {\"items\": items, \"region\": region, \"total\": invoice_total(items, tax)}\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 4,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "tests"
+          },
+          "observation": "test_calc.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 5,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"tests/test_calc.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "tests/test_calc.py"
+          },
+          "observation": "import pytest\n\nfrom billing import create_invoice, invoice_total\n\nITEMS = [{\"amount\": 100.0}]\n\n\ndef test_keyword_only():\n    with pytest.raises(TypeError):\n        invoice_total(ITEMS, 0.2)\n\n\ndef test_tax_by_keyword():\n    assert invoice_total(ITEMS, tax_rate=0.2) == 120.0\n\n\ndef test_discount_before_tax():\n    assert invoice_total(ITEMS, tax_rate=0.2, discount_rate=0.1) == 108.0\n\n\ndef test_caller_updated():\n    inv = create_invoice(ITEMS, region=\"UK\")\n    assert inv[\"total\"] == 120.0\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 6,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"billing/__init__.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/__init__.py"
+          },
+          "observation": "from .api import create_invoice\nfrom .calc import invoice_total\n\n__all__ = [\"invoice_total\", \"create_invoice\"]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 7,
+          "assistant": "\n\nThe tests name the tax param `tax_rate`. Updating `calc.py` and the caller in `api.py`:\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "[wrote 0 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 8,
+          "assistant": "\n\nThat write was empty \u2014 rewriting with the actual content:\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "[wrote 0 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 9,
+          "assistant": "\n\nI forgot the content argument. Let me write it properly:\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "[wrote 0 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 10,
+          "assistant": "\n\nI keep omitting the content. Let me include it explicitly:\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "[wrote 0 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 11,
+          "assistant": "\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "[wrote 0 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        }
+      ],
+      "test_output": "\n==================================== ERRORS ====================================\n_____________________ ERROR collecting tests/test_calc.py ______________________\nImportError while importing test module '/private/var/folders/px/r2rzqr_n57x7ldc460wdpk540000gn/T/wsp-runs-57whphxr/02-multifile-api-y0zfa78e/tests/test_calc.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/Users/shivanshtalwar/.pyenv/versions/3.10.20/lib/python3.10/importlib/__init__.py:126: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\ntests/test_calc.py:3: in <module>\n    from billing import create_invoice, invoice_total\nbilling/__init__.py:1: in <module>\n    from .api import create_invoice\nbilling/api.py:1: in <module>\n    from .calc import invoice_total\nE   ImportError: cannot import name 'invoice_total' from 'billing.calc' (/private/var/folders/px/r2rzqr_n57x7ldc460wdpk540000gn/T/wsp-runs-57whphxr/02-multifile-api-y0zfa78e/billing/calc.py)\n=========================== short test summary info ============================\nERROR tests/test_calc.py\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.26s\n",
+      "workspace": null,
+      "n_steps": 12,
+      "seconds": 107.5
+    },
+    {
+      "task_id": "03-deterministic-report",
+      "resolved": true,
+      "submitted": true,
+      "steps": [
+        {
+          "index": 0,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": ""
+          },
+          "observation": "conftest.py\nreports/\ntests/",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"reports\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "reports"
+          },
+          "observation": "__init__.py\nsummarize.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 2,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"reports/summarize.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"reports/__init__.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"tests/test_summarize.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "reports/summarize.py"
+          },
+          "observation": "\"\"\"Team spend report.\"\"\"\n\n\ndef summarize(rows):\n    \"\"\"One row per team: ``{\"team\", \"total\", \"n\"}``.\n\n    Sorted by total descending, ties by team name ascending.\n    \"\"\"\n    groups = {}\n    for row in rows:\n        groups.setdefault(row[\"team\"], []).append(row[\"score\"])\n\n    out = [{\"team\": team, \"total\": round(sum(scores), 2), \"n\": len(scores)}\n           for team, scores in groups.items()]\n    out.sort(key=lambda r: str(r[\"total\"]), reverse=True)\n    return out\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 3,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "tests"
+          },
+          "observation": "test_summarize.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 4,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"tests/test_summarize.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "tests/test_summarize.py"
+          },
+          "observation": "from reports import summarize\n\nROWS = [\n    {\"team\": \"alpha\", \"score\": 10},\n    {\"team\": \"beta\", \"score\": 9},\n    {\"team\": \"gamma\", \"score\": 30},\n]\n\n\ndef test_highest_first_numerically():\n    assert [r[\"team\"] for r in summarize(ROWS)] == [\"gamma\", \"alpha\", \"beta\"]\n\n\ndef test_totals_are_correct():\n    assert summarize(ROWS) == [\n        {\"team\": \"gamma\", \"total\": 30, \"n\": 1},\n        {\"team\": \"alpha\", \"total\": 10, \"n\": 1},\n        {\"team\": \"beta\", \"total\": 9, \"n\": 1},\n    ]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 5,
+          "assistant": "\n\n<tool name=\"shell\">{\"cmd\": \"python -m pytest -q 2>&1 | tail -20\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -m pytest -q 2>&1 | tail -20"
+          },
+          "observation": "[exit 0]\n\ntests/test_summarize.py:11: AssertionError\n___________________________ test_totals_are_correct ____________________________\n\n    def test_totals_are_correct():\n>       assert summarize(ROWS) == [\n            {\"team\": \"gamma\", \"total\": 30, \"n\": 1},\n            {\"team\": \"alpha\", \"total\": 10, \"n\": 1},\n            {\"team\": \"beta\", \"total\": 9, \"n\": 1},\n        ]\nE       AssertionError: assert [{'team': 'be...: 10, 'n': 1}] == [{'team': 'ga...': 9, 'n': 1}]\nE         \nE         At index 0 diff: {'team': 'beta', 'total': 9, 'n': 1} != {'team': 'gamma', 'total': 30, 'n': 1}\nE         Use -v to get more diff\n\ntests/test_summarize.py:15: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_summarize.py::test_highest_first_numerically - AssertionErr...\nFAILED tests/test_summarize.py::test_totals_are_correct - AssertionError: ass...\n2 failed in 0.12s\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 6,
+          "assistant": "\n\nThe bug is sorting by `str(r[\"total\"])` \u2014 lexicographic, so `\"9\" > \"10\"`. Fixing with a numeric key plus team tie-break:\n\n<tool name=\"write_file\">{\"path\": \"reports/summarize.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "reports/summarize.py"
+          },
+          "observation": "[wrote 0 bytes to reports/summarize.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 7,
+          "assistant": "\n\nI accidentally wrote an empty file. Let me restore it with the fix:\n\n<tool name=\"write_file\">{\"path\": \"reports/summarize.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "reports/summarize.py"
+          },
+          "observation": "[wrote 0 bytes to reports/summarize.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 8,
+          "assistant": "\n\n<tool name=\"write_file\">{\"path\": \"reports/summarize.py\", \"content\": \"\\\"\\\"\\\"Team spend report.\\\"\\\"\\\"\\n\\n\\ndef summarize(rows):\\n    \\\"\\\"\\\"One row per team: ``{\\\"team\\\", \\\"total\\\", \\\"n\\\"}``.\\n\\n    Sorted by total descending, ties by team name ascending.\\n    \\\"\\\"\\\"\\n    groups = {}\\n    for row in rows:\\n        groups.setdefault(row[\\\"team\\\"], []).append(row[\\\"score\\\"])\\n\\n    out = [{\\\"team\\\": team, \\\"total\\\": round(sum(scores), 2), \\\"n\\\": len(scores)}\\n           for team, scores in groups.items()]\\n    out.sort(key=lambda r: (-r[\\\"total\\\"], r[\\\"team\\\"]))\\n    return out\\n\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "reports/summarize.py",
+            "content": "\"\"\"Team spend report.\"\"\"\n\n\ndef summarize(rows):\n    \"\"\"One row per team: ``{\"team\", \"total\", \"n\"}``.\n\n    Sorted by total descending, ties by team name ascending.\n    \"\"\"\n    groups = {}\n    for row in rows:\n        groups.setdefault(row[\"team\"], []).append(row[\"score\"])\n\n    out = [{\"team\": team, \"total\": round(sum(scores), 2), \"n\": len(scores)}\n           for team, scores in groups.items()]\n    out.sort(key=lambda r: (-r[\"total\"], r[\"team\"]))\n    return out\n"
+          },
+          "observation": "[wrote 464 bytes to reports/summarize.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 9,
+          "assistant": "\n\n<tool name=\"shell\">{\"cmd\": \"python -m pytest -q 2>&1 | tail -5\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -m pytest -q 2>&1 | tail -5"
+          },
+          "observation": "[exit 0]\n..                                                                       [100%]\n2 passed in 0.02s\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 10,
+          "assistant": "\n\nBoth tests pass. Quick sanity check on tie-breaking and repeated-call determinism:\n\n<tool name=\"shell\">{\"cmd\": \"python -c \\\"\\nfrom reports import summarize\\nrows = [{'team': 'zeta', 'score': 5}, {'team': 'alpha', 'score': 5}, {'team': 'mid', 'score': 10}, {'team': 'mid', 'score': 0}]\\nr1 = summarize(rows); r2 = summarize(rows)\\nprint([ (r['team'], r['total']) for r in r1 ])\\nassert r1 == r2\\nassert [r['team'] for r in r1] == ['mid', 'alpha', 'zeta']\\nprint('ok')\\n\\\"\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -c \"\nfrom reports import summarize\nrows = [{'team': 'zeta', 'score': 5}, {'team': 'alpha', 'score': 5}, {'team': 'mid', 'score': 10}, {'team': 'mid', 'score': 0}]\nr1 = summarize(rows); r2 = summarize(rows)\nprint([ (r['team'], r['total']) for r in r1 ])\nassert r1 == r2\nassert [r['team'] for r in r1] == ['mid', 'alpha', 'zeta']\nprint('ok')\n\""
+          },
+          "observation": "[exit 0]\n[('mid', 10), ('alpha', 5), ('zeta', 5)]\nok\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 11,
+          "assistant": "\n\nFixed. The bug was `out.sort(key=lambda r: str(r[\"total\"]), reverse=True)` \u2014 sorting totals as strings, so `\"9\"` lexicographically sorts above `\"10\"`. Replaced it with `key=lambda r: (-r[\"total\"], r[\"team\"])`, which sorts numerically descending by total with team name ascending as the tie-breaker. Python's stable sort plus the deterministic key makes repeated calls return an identical list.\n\n<tool name=\"submit\"></tool>",
+          "tool": "submit",
+          "tool_input": {},
+          "observation": "[submitted]",
+          "finish_reason": "stop"
+        }
+      ],
+      "test_output": ".......                                                                  [100%]\n7 passed in 0.05s\n",
+      "workspace": null,
+      "n_steps": 12,
+      "seconds": 208.3
+    }
+  ]
+}

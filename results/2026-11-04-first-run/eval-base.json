@@ -1,0 +1,381 @@
+{
+  "summary": {
+    "n": 3,
+    "resolved": 2,
+    "rate": 0.667,
+    "probes": {
+      "n_episodes": 3,
+      "n_unresolved": 1,
+      "ranked": [],
+      "weight_candidates": []
+    },
+    "episodes": [
+      {
+        "task_id": "01-bugfix-off-by-one",
+        "resolved": true,
+        "submitted": true,
+        "test_output": ".......                                                                  [100%]\n7 passed in 0.04s\n",
+        "workspace": null,
+        "n_steps": 8,
+        "seconds": 84.2
+      },
+      {
+        "task_id": "02-multifile-api",
+        "resolved": false,
+        "submitted": false,
+        "test_output": "...F                                                                     [100%]\n=================================== FAILURES ===================================\n_____________________________ test_caller_updated ______________________________\n\n    def test_caller_updated():\n>       inv = create_invoice(ITEMS, region=\"UK\")\n\ntests/test_calc.py:22: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nitems = [{'amount': 100.0}], region = 'UK'\n\n    def create_invoice(items, region=\"US\"):\n        \"\"\"Build a simple invoice dict for a region.\"\"\"\n        tax = 0.2 if region == \"UK\" else 0.0\n>       return {\"items\": items, \"region\": region, \"total\": invoice_total(items, tax)}\nE       TypeError: invoice_total() takes 1 positional argument but 2 were given\n\nbilling/api.py:7: TypeError\n=========================== short test summary info ============================\nFAILED tests/test_calc.py::test_caller_updated - TypeError: invoice_total() t...\n1 failed, 3 passed in 0.09s\n",
+        "workspace": null,
+        "n_steps": 12,
+        "seconds": 187.6
+      },
+      {
+        "task_id": "03-deterministic-report",
+        "resolved": true,
+        "submitted": true,
+        "test_output": ".......                                                                  [100%]\n7 passed in 0.04s\n",
+        "workspace": null,
+        "n_steps": 10,
+        "seconds": 152.7
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 25158,
+      "completion_tokens": 3861,
+      "calls": 30
+    }
+  },
+  "episodes": [
+    {
+      "task_id": "01-bugfix-off-by-one",
+      "resolved": true,
+      "submitted": true,
+      "steps": [
+        {
+          "index": 0,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \".\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "."
+          },
+          "observation": "conftest.py\ntests/\ntextkit/",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"textkit\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "textkit"
+          },
+          "observation": "__init__.py\npaginate.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 2,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"textkit/paginate.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"tests/test_paginate.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"textkit/__init__.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "textkit/paginate.py"
+          },
+          "observation": "def paginate(items, page, per_page=10):\n    \"\"\"Return the items on ``page`` (0-indexed), ``per_page`` of them.\"\"\"\n    start = page * per_page\n    return items[start : start + per_page - 1]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 3,
+          "assistant": "\n\nThe bug is the off-by-one in the slice: `start + per_page - 1` should be `start + per_page`.\n\n<tool name=\"write_file\">{\"path\": \"textkit/paginate.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "textkit/paginate.py"
+          },
+          "observation": "[wrote 0 bytes to textkit/paginate.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 4,
+          "assistant": "\n\nI made an error \u2014 the write needs the `content` parameter. Let me write the fixed file.\n\n<tool name=\"write_file\">{\"path\": \"textkit/paginate.py\", \"content\": \"def paginate(items, page, per_page=10):\\n    \\\"\\\"\\\"Return the items on ``page`` (0-indexed), ``per_page`` of them.\\\"\\\"\\\"\\n    start = page * per_page\\n    return items[start : start + per_page]\\n\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "textkit/paginate.py",
+            "content": "def paginate(items, page, per_page=10):\n    \"\"\"Return the items on ``page`` (0-indexed), ``per_page`` of them.\"\"\"\n    start = page * per_page\n    return items[start : start + per_page]\n"
+          },
+          "observation": "[wrote 185 bytes to textkit/paginate.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 5,
+          "assistant": "\n\nNow let me run the tests.\n\n<tool name=\"shell\">{\"cmd\": \"python -m pytest -q\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -m pytest -q"
+          },
+          "observation": "[exit 0]\n..                                                                       [100%]\n2 passed in 0.00s\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 6,
+          "assistant": "\n\nLet me verify the edge cases from the hidden suite directly.\n\n<tool name=\"shell\">{\"cmd\": \"python -c \\\"from textkit.paginate import paginate; print(paginate([],0,3)); print(paginate(list(range(10)),0,3)); print(paginate(list(range(10)),3,3)); print(paginate(list(range(10)),5,3)); print(paginate(list(range(10)),1,3))\\\"\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -c \"from textkit.paginate import paginate; print(paginate([],0,3)); print(paginate(list(range(10)),0,3)); print(paginate(list(range(10)),3,3)); print(paginate(list(range(10)),5,3)); print(paginate(list(range(10)),1,3))\""
+          },
+          "observation": "[exit 0]\n[]\n[0, 1, 2]\n[9]\n[]\n[3, 4, 5]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 7,
+          "assistant": "\n\nAll edge cases pass: empty list \u2192 `[]`, page 0 \u2192 3 items, last short page \u2192 `[9]` (the previously-dropped item), and out-of-range page \u2192 `[]` instead of raising.\n\nThe fix: the slice end was `start + per_page - 1` (off-by-one), which dropped the last item of every page \u2014 and since a short final page had its last item dropped, that item vanished entirely. Changed to `start + per_page`.\n\n<tool name=\"submit\"></tool>",
+          "tool": "submit",
+          "tool_input": {},
+          "observation": "[submitted]",
+          "finish_reason": "stop"
+        }
+      ],
+      "test_output": ".......                                                                  [100%]\n7 passed in 0.04s\n",
+      "workspace": null,
+      "n_steps": 8,
+      "seconds": 84.2
+    },
+    {
+      "task_id": "02-multifile-api",
+      "resolved": false,
+      "submitted": false,
+      "steps": [
+        {
+          "index": 0,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \".\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "."
+          },
+          "observation": "billing/\nconftest.py\ntests/",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"billing\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "billing"
+          },
+          "observation": "__init__.py\napi.py\ncalc.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 2,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"billing/__init__.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"billing/api.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"billing/calc.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/__init__.py"
+          },
+          "observation": "from .api import create_invoice\nfrom .calc import invoice_total\n\n__all__ = [\"invoice_total\", \"create_invoice\"]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 3,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"billing/api.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"billing/calc.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/api.py"
+          },
+          "observation": "from .calc import invoice_total\n\n\ndef create_invoice(items, region=\"US\"):\n    \"\"\"Build a simple invoice dict for a region.\"\"\"\n    tax = 0.2 if region == \"UK\" else 0.0\n    return {\"items\": items, \"region\": region, \"total\": invoice_total(items, tax)}\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 4,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"billing/calc.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "\"\"\"Invoice maths.\"\"\"\n\n\ndef invoice_total(items, tax):\n    \"\"\"Total for ``items`` (dicts with an ``amount``) including ``tax``.\"\"\"\n    subtotal = sum(item[\"amount\"] for item in items)\n    return round(subtotal * (1 + tax), 2)\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 5,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "conftest.py"
+          },
+          "observation": "import pathlib\nimport sys\n\nsys.path.insert(0, str(pathlib.Path(__file__).parent))\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 6,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "tests"
+          },
+          "observation": "test_calc.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 7,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"tests/test_calc.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "tests/test_calc.py"
+          },
+          "observation": "import pytest\n\nfrom billing import create_invoice, invoice_total\n\nITEMS = [{\"amount\": 100.0}]\n\n\ndef test_keyword_only():\n    with pytest.raises(TypeError):\n        invoice_total(ITEMS, 0.2)\n\n\ndef test_tax_by_keyword():\n    assert invoice_total(ITEMS, tax_rate=0.2) == 120.0\n\n\ndef test_discount_before_tax():\n    assert invoice_total(ITEMS, tax_rate=0.2, discount_rate=0.1) == 108.0\n\n\ndef test_caller_updated():\n    inv = create_invoice(ITEMS, region=\"UK\")\n    assert inv[\"total\"] == 120.0\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 8,
+          "assistant": "\n\nThe tests expect a keyword-only `tax_rate` param plus `discount_rate`. Updating both files:\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\"}</tool>\n<tool name=\"write_file\">{\"path\": \"billing/api.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py"
+          },
+          "observation": "[wrote 0 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 9,
+          "assistant": "\n\nI need to provide content. Let me write both files properly.\n\n<tool name=\"write_file\">{\"path\": \"billing/calc.py\", \"content\": \"\\\"\\\"\\\"Invoice maths.\\\"\\\"\\\"\\n\\n\\ndef invoice_total(items, *, tax_rate, discount_rate=0.0):\\n    \\\"\\\"\\\"Total for ``items`` (dicts with an ``amount``) after discount, then tax.\\n\\n    ``tax_rate`` is keyword-only. ``discount_rate`` is applied to the\\n    subtotal before tax.\\n    \\\"\\\"\\\"\\n    subtotal = sum(item[\\\"amount\\\"] for item in items)\\n    discounted = subtotal * (1 - discount_rate)\\n    return round(discounted * (1 + tax_rate), 2)\\n\"}</tool>\n<tool name=\"write_file\">{\"path\": \"billing/api.py\", \"content\": \"from .calc import invoice_total\\n\\n\\ndef create_invoice(items, region=\\\"US\\\"):\\n    \\\"\\\"\\\"Build a simple invoice dict for a region.\\\"\\\"\\\"\\n    tax = 0.2 if region == \\\"UK\\\" else 0.0\\n    return {\\\"items\\\": items, \\\"region\\\": region, \\\"total\\\": invoice_total(items, tax_rate=tax)}\\n\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "billing/calc.py",
+            "content": "\"\"\"Invoice maths.\"\"\"\n\n\ndef invoice_total(items, *, tax_rate, discount_rate=0.0):\n    \"\"\"Total for ``items`` (dicts with an ``amount``) after discount, then tax.\n\n    ``tax_rate`` is keyword-only. ``discount_rate`` is applied to the\n    subtotal before tax.\n    \"\"\"\n    subtotal = sum(item[\"amount\"] for item in items)\n    discounted = subtotal * (1 - discount_rate)\n    return round(discounted * (1 + tax_rate), 2)\n"
+          },
+          "observation": "[wrote 415 bytes to billing/calc.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 10,
+          "assistant": "\n\n<tool name=\"shell\">{\"cmd\": \"python -m pytest -q\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -m pytest -q"
+          },
+          "observation": "[exit 1]\n...F                                                                     [100%]\n=================================== FAILURES ===================================\n_____________________________ test_caller_updated ______________________________\n\n    def test_caller_updated():\n>       inv = create_invoice(ITEMS, region=\"UK\")\n\ntests/test_calc.py:22: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nitems = [{'amount': 100.0}], region = 'UK'\n\n    def create_invoice(items, region=\"US\"):\n        \"\"\"Build a simple invoice dict for a region.\"\"\"\n        tax = 0.2 if region == \"UK\" else 0.0\n>       return {\"items\": items, \"region\": region, \"total\": invoice_total(items, tax)}\nE       TypeError: invoice_total() takes 1 positional argument but 2 were given\n\nbilling/api.py:7: TypeError\n=========================== short test summary info ============================\nFAILED tests/test_calc.py::test_caller_updated - TypeError: invoice_total() t...\n1 failed, 3 passed in 0.08s\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 11,
+          "assistant": "\n\nThe earlier 0-byte write left `api.py` stale. Let me check and rewrite it.\n\n<tool name=\"read_file\">{\"path\": \"billing/api.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "billing/api.py"
+          },
+          "observation": "from .calc import invoice_total\n\n\ndef create_invoice(items, region=\"US\"):\n    \"\"\"Build a simple invoice dict for a region.\"\"\"\n    tax = 0.2 if region == \"UK\" else 0.0\n    return {\"items\": items, \"region\": region, \"total\": invoice_total(items, tax)}\n",
+          "finish_reason": "stop"
+        }
+      ],
+      "test_output": "...F                                                                     [100%]\n=================================== FAILURES ===================================\n_____________________________ test_caller_updated ______________________________\n\n    def test_caller_updated():\n>       inv = create_invoice(ITEMS, region=\"UK\")\n\ntests/test_calc.py:22: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nitems = [{'amount': 100.0}], region = 'UK'\n\n    def create_invoice(items, region=\"US\"):\n        \"\"\"Build a simple invoice dict for a region.\"\"\"\n        tax = 0.2 if region == \"UK\" else 0.0\n>       return {\"items\": items, \"region\": region, \"total\": invoice_total(items, tax)}\nE       TypeError: invoice_total() takes 1 positional argument but 2 were given\n\nbilling/api.py:7: TypeError\n=========================== short test summary info ============================\nFAILED tests/test_calc.py::test_caller_updated - TypeError: invoice_total() t...\n1 failed, 3 passed in 0.09s\n",
+      "workspace": null,
+      "n_steps": 12,
+      "seconds": 187.6
+    },
+    {
+      "task_id": "03-deterministic-report",
+      "resolved": true,
+      "submitted": true,
+      "steps": [
+        {
+          "index": 0,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": ""
+          },
+          "observation": "conftest.py\nreports/\ntests/",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "assistant": "\n\n<tool name=\"list_dir\">{\"path\": \"reports\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "list_dir",
+          "tool_input": {
+            "path": "reports"
+          },
+          "observation": "__init__.py\nsummarize.py",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 2,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"reports/summarize.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"reports/__init__.py\"}</tool>\n<tool name=\"list_dir\">{\"path\": \"tests\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "reports/summarize.py"
+          },
+          "observation": "\"\"\"Team spend report.\"\"\"\n\n\ndef summarize(rows):\n    \"\"\"One row per team: ``{\"team\", \"total\", \"n\"}``.\n\n    Sorted by total descending, ties by team name ascending.\n    \"\"\"\n    groups = {}\n    for row in rows:\n        groups.setdefault(row[\"team\"], []).append(row[\"score\"])\n\n    out = [{\"team\": team, \"total\": round(sum(scores), 2), \"n\": len(scores)}\n           for team, scores in groups.items()]\n    out.sort(key=lambda r: str(r[\"total\"]), reverse=True)\n    return out\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 3,
+          "assistant": "\n\n<tool name=\"read_file\">{\"path\": \"tests/test_summarize.py\"}</tool>\n<tool name=\"read_file\">{\"path\": \"conftest.py\"}</tool>",
+          "tool": "read_file",
+          "tool_input": {
+            "path": "tests/test_summarize.py"
+          },
+          "observation": "from reports import summarize\n\nROWS = [\n    {\"team\": \"alpha\", \"score\": 10},\n    {\"team\": \"beta\", \"score\": 9},\n    {\"team\": \"gamma\", \"score\": 30},\n]\n\n\ndef test_highest_first_numerically():\n    assert [r[\"team\"] for r in summarize(ROWS)] == [\"gamma\", \"alpha\", \"beta\"]\n\n\ndef test_totals_are_correct():\n    assert summarize(ROWS) == [\n        {\"team\": \"gamma\", \"total\": 30, \"n\": 1},\n        {\"team\": \"alpha\", \"total\": 10, \"n\": 1},\n        {\"team\": \"beta\", \"total\": 9, \"n\": 1},\n    ]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 4,
+          "assistant": "\n\nThe bug is clear: `str(r[\"total\"])` sorts lexicographically, so `\"9\"` ranks above `\"10\"`. Fixing the sort key:\n\n<tool name=\"write_file\">{\"path\": \"reports/summarize.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "reports/summarize.py"
+          },
+          "observation": "[wrote 0 bytes to reports/summarize.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 5,
+          "assistant": "\n\nI accidentally wrote an empty file \u2014 restoring it with the corrected sort key:\n\n<tool name=\"write_file\">{\"path\": \"reports/summarize.py\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "reports/summarize.py"
+          },
+          "observation": "[wrote 0 bytes to reports/summarize.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 6,
+          "assistant": "\n\n<tool name=\"write_file\">{\"path\": \"reports/summarize.py\", \"content\": \"\\\"\\\"\\\"Team spend report.\\\"\\\"\\\"\\n\\n\\ndef summarize(rows):\\n    \\\"\\\"\\\"One row per team: ``{\\\"team\\\", \\\"total\\\", \\\"n\\\"}``.\\n\\n    Sorted by total descending, ties by team name ascending.\\n    \\\"\\\"\\\"\\n    groups = {}\\n    for row in rows:\\n        groups.setdefault(row[\\\"team\\\"], []).append(row[\\\"score\\\"])\\n\\n    out = [{\\\"team\\\": team, \\\"total\\\": round(sum(scores), 2), \\\"n\\\": len(scores)}\\n           for team, scores in groups.items()]\\n    out.sort(key=lambda r: (-r[\\\"total\\\"], r[\\\"team\\\"]))\\n    return out\\n\"}</tool>",
+          "tool": "write_file",
+          "tool_input": {
+            "path": "reports/summarize.py",
+            "content": "\"\"\"Team spend report.\"\"\"\n\n\ndef summarize(rows):\n    \"\"\"One row per team: ``{\"team\", \"total\", \"n\"}``.\n\n    Sorted by total descending, ties by team name ascending.\n    \"\"\"\n    groups = {}\n    for row in rows:\n        groups.setdefault(row[\"team\"], []).append(row[\"score\"])\n\n    out = [{\"team\": team, \"total\": round(sum(scores), 2), \"n\": len(scores)}\n           for team, scores in groups.items()]\n    out.sort(key=lambda r: (-r[\"total\"], r[\"team\"]))\n    return out\n"
+          },
+          "observation": "[wrote 464 bytes to reports/summarize.py]",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 7,
+          "assistant": "\n\n<tool name=\"shell\">{\"cmd\": \"python -m pytest -q\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -m pytest -q"
+          },
+          "observation": "[exit 0]\n..                                                                       [100%]\n2 passed in 0.02s\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 8,
+          "assistant": "\n\nTests pass. Quick sanity check on tie-breaking and determinism:\n\n<tool name=\"shell\">{\"cmd\": \"python -c \\\"\\nfrom reports import summarize\\nrows = [{'team': 'zeta', 'score': 5}, {'team': 'alpha', 'score': 5}, {'team': 'mid', 'score': 10}, {'team': 'zeta', 'score': 0}]\\na = summarize(rows); b = summarize(rows)\\nassert a == b\\nassert [r['team'] for r in a] == ['mid', 'alpha', 'zeta'], a\\nprint('ok', a)\\n\\\"\"}</tool>",
+          "tool": "shell",
+          "tool_input": {
+            "cmd": "python -c \"\nfrom reports import summarize\nrows = [{'team': 'zeta', 'score': 5}, {'team': 'alpha', 'score': 5}, {'team': 'mid', 'score': 10}, {'team': 'zeta', 'score': 0}]\na = summarize(rows); b = summarize(rows)\nassert a == b\nassert [r['team'] for r in a] == ['mid', 'alpha', 'zeta'], a\nprint('ok', a)\n\""
+          },
+          "observation": "[exit 0]\nok [{'team': 'mid', 'total': 10, 'n': 1}, {'team': 'alpha', 'total': 5, 'n': 1}, {'team': 'zeta', 'total': 5, 'n': 2}]\n",
+          "finish_reason": "stop"
+        },
+        {
+          "index": 9,
+          "assistant": "\n\nThe fix works: numeric descending sort, ties broken by team name ascending, and repeated calls return an identical list. Submitting.\n\n<tool name=\"submit\"></tool>",
+          "tool": "submit",
+          "tool_input": {},
+          "observation": "[submitted]",
+          "finish_reason": "stop"
+        }
+      ],
+      "test_output": ".......                                                                  [100%]\n7 passed in 0.04s\n",
+      "workspace": null,
+      "n_steps": 10,
+      "seconds": 152.7
+    }
+  ]
+}

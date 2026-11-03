@@ -137,7 +137,9 @@ evals/
   harness.py   agent loop, sandbox, hidden-test grading
   mock.py      scripted models for offline tests
   tasks/       three small graded repos (bugfix, multi-file API change, ordering)
-tests/         39 tests
+results/
+  2026-11-04-first-run/  raw artifacts: episodes, patch, atlas, analyst prompt
+tests/         43 tests
 docs/
   00-paper-map.md   what each paper experiment shows and what transfers
   01-feasibility.md the arithmetic, the critique, and the bounded goal

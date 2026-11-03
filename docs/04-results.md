@@ -1,8 +1,11 @@
 # 04 · First results: base vs one weight edit
 
-Run on 2026-11-03/04 on the machine in `docs/03-runbook.md`. Everything here is from
-`runs/eval-base.json`, `runs/eval-patched.json`, `runs/inert-base.json`, `runs/inert-patched.json`
-(all gitignored; regenerate with the commands below).
+Run on 2026-11-03/04 on the machine in `docs/03-runbook.md`.
+
+The raw artifacts are committed under
+[`results/2026-11-04-first-run/`](../results/2026-11-04-first-run/) — the four eval/inertness
+JSONs with full trajectories, the patch, the atlas, and the rendered analyst prompt — so the
+numbers below can be re-derived offline with `wsp probes` and `scripts/compare_runs.py`.
 
 ## Setup
 

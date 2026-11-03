@@ -1,0 +1,315 @@
+You are doing Weight-Space Programming on a 4-bit quantized 27B language model.
+You cannot run training, gradients, or fine-tuning. You may only change numbers
+inside the checkpoint. Your edit must remove a behaviour that is suppressing
+ability the model already has; it cannot add ability that is absent.
+
+## Evidence: how the model fails as a coding agent
+{
+ "n_episodes": 2,
+ "n_unresolved": 1,
+ "ranked": [
+  {
+   "probe": "no_verify",
+   "episodes": 1,
+   "count": 1,
+   "lever": "harness",
+   "note": "submitted without executing tests; verify-before-done is a policy, enforce it",
+   "prevalence": 0.5
+  }
+ ],
+ "weight_candidates": []
+}
+
+## Weight atlas (per-tensor statistics; full matrices are far too large to show)
+{
+ "model": {
+  "bits": 4,
+  "group_size": 64,
+  "params_b": 27.36
+ },
+ "tensors": {
+  "language_model.model.layers.15.mlp.down_proj": {
+   "shape": [
+    5120,
+    17408
+   ],
+   "abs_mean": 0.008571847341954708,
+   "abs_max": 0.2373046875,
+   "row_norm": {
+    "min": 0.6308882832527161,
+    "median": 1.4378864765167236,
+    "max": 2.8888251781463623
+   },
+   "col_norm": {
+    "min": 0.6666987538337708,
+    "median": 0.7773876190185547,
+    "max": 1.0270600318908691
+   },
+   "top_rows": [
+    [
+     3994,
+     2.88883
+    ],
+    [
+     3532,
+     1.92568
+    ],
+    [
+     1689,
+     1.75041
+    ],
+    [
+     2631,
+     1.71651
+    ],
+    [
+     2205,
+     1.69381
+    ],
+    [
+     2482,
+     1.6814
+    ],
+    [
+     1132,
+     1.65221
+    ],
+    [
+     1652,
+     1.64506
+    ]
+   ],
+   "top_cols": [
+    [
+     6501,
+     1.02706
+    ],
+    [
+     5794,
+     1.02417
+    ],
+    [
+     9931,
+     1.01481
+    ],
+    [
+     9708,
+     1.0147
+    ],
+    [
+     4914,
+     1.00693
+    ],
+    [
+     9205,
+     0.98946
+    ],
+    [
+     13171,
+     0.98834
+    ],
+    [
+     1170,
+     0.98451
+    ]
+   ],
+   "dominant_direction_energy": 0.0517,
+   "dominant_direction": [
+    0.012544,
+    -0.002679,
+    0.008506,
+    -0.002076,
+    -0.002673,
+    0.006313,
+    0.012215,
+    -0.000793,
+    -0.019424,
+    0.006683,
+    0.011666,
+    0.008665,
+    0.021651,
+    0.000849,
+    -0.003957,
+    0.010919,
+    0.016375,
+    0.011906,
+    -0.020863,
+    0.012555,
+    -0.012809,
+    0.003353,
+    0.003596,
+    0.016464,
+    "..."
+   ],
+   "zero_cols": 0,
+   "grid": {
+    "groups": 272,
+    "group_size": 64,
+    "scale_median": 0.00335693,
+    "scale_p01_p99": [
+     0.00222778,
+     0.00482178
+    ],
+    "negative_scale_frac": 0.5034,
+    "degenerate_groups": 0,
+    "bias_abs_median": 0.0279541,
+    "effective_bits": 4.5
+   },
+   "n_weights": 89128960
+  },
+  "language_model.model.layers.19.mlp.down_proj": {
+   "shape": [
+    5120,
+    17408
+   ],
+   "abs_mean": 0.008698984980583191,
+   "abs_max": 0.50390625,
+   "row_norm": {
+    "min": 0.7193614840507507,
+    "median": 1.4858639240264893,
+    "max": 5.964334964752197
+   },
+   "col_norm": {
+    "min": 0.6227858662605286,
+    "median": 0.7916427850723267,
+    "max": 1.0726131200790405
+   },
+   "top_rows": [
+    [
+     3994,
+     5.96433
+    ],
+    [
+     1689,
+     1.70746
+    ],
+    [
+     2316,
+     1.703
+    ],
+    [
+     2482,
+     1.6622
+    ],
+    [
+     983,
+     1.64434
+    ],
+    [
+     5079,
+     1.6403
+    ],
+    [
+     2631,
+     1.6304
+    ],
+    [
+     3532,
+     1.59647
+    ]
+   ],
+   "top_cols": [
+    [
+     681,
+     1.07261
+    ],
+    [
+     11228,
+     0.94133
+    ],
+    [
+     5491,
+     0.93666
+    ],
+    [
+     6123,
+     0.93334
+    ],
+    [
+     8528,
+     0.92917
+    ],
+    [
+     4576,
+     0.92845
+    ],
+    [
+     11853,
+     0.92831
+    ],
+    [
+     9091,
+     0.92715
+    ]
+   ],
+   "dominant_direction_energy": 0.0611,
+   "dominant_direction": [
+    0.001999,
+    0.006412,
+    0.003911,
+    0.002092,
+    0.002825,
+    -0.00102,
+    -0.004814,
+    0.003116,
+    -0.006104,
+    -0.003116,
+    0.00269,
+    -0.002675,
+    -0.000619,
+    -0.000715,
+    0.007834,
+    0.00331,
+    -0.00707,
+    -0.002201,
+    -0.001447,
+    0.002876,
+    -0.005444,
+    0.004225,
+    0.000598,
+    0.000742,
+    "..."
+   ],
+   "zero_cols": 0,
+   "grid": {
+    "groups": 272,
+    "group_size": 64,
+    "scale_median": 0.00341797,
+    "scale_p01_p99": [
+     0.00228882,
+     0.00494385
+    ],
+    "negative_scale_frac": 0.5033,
+    "degenerate_groups": 0,
+    "bias_abs_median": 0.02856445,
+    "effective_bits": 4.5
+   },
+   "n_weights": 89128960
+  }
+ }
+}
+
+## Rules
+- Prefer one hypothesis, one tensor pair, one small edit.
+- `project_out` removes the component of selected columns along `direction`.
+  Pass the direction exactly as listed in the atlas (it is already unit length).
+- Changing more than ~0.5% of the model's weights is a red flag, not a win.
+- If the evidence looks like a harness problem (no tests run, context bloat),
+  reply with {"hypothesis": "not a weight problem: ...", "ops": []}.
+
+Reply with exactly one JSON object and nothing else:
+
+{
+  "hypothesis": "one sentence: which behaviour in the weights you are removing and why",
+  "ops": [
+    {"op": "project_out", "tensor": "<full tensor base name>", "space": "float",
+     "args": {"direction": [<one float per ROW of the tensor>],
+              "cols": [<column indices, or null for all>], "alpha": 1.0}}
+  ]
+}
+
+ops allowed:
+  float space: project_out, add_rank1, col_gain, row_gain, zero_cols
+  quant space: group_gain {rows,groups,factor,mode}, group_shift {rows,groups,delta}
+Keep it small: prefer < 200 modified columns per tensor and alpha <= 1.0.
+

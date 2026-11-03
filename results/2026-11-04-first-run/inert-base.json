@@ -1,0 +1,7 @@
+{
+  "def fibonacci(n):": "```python def fibonacci(n): if n < 0: raise ValueError(\"n must be non-negative\") a, b = 0, 1 for _ in range(n): a, b = b, a + b return a ``` This returns the `n`-th Fibonacci number where: ```python fibonacci(0) # 0 fibonacci(1) # 1 fibonacci(2) # 1 fibonacci(3) # 2 fibonacci(4) # 3 ```",
+  "class LRUCache:\n    def __init__(self, capacity):": "",
+  "The reason gradient descent works is": "The reason gradient descent works is that the gradient of a differentiable loss function points in the direction of steepest increase, so moving a small step in the opposite direction \u2014 the negative gradient \u2014 tends to decrease the loss. Repeating this update with a suitable learning rate lets the model iteratively reduce the objective, converging to a minimum for convex problems or to a local minimum/stationary point for many non-convex problems.",
+  "Compute 17 * 23 step by step.": "To compute \\(17 \\times 23\\) step by step: 1. Break 23 into \\(20 + 3\\): \\[ 17 \\times 23 = 17 \\times (20 + 3) \\] 2. Multiply 17 by 20: \\[ 17 \\times 20 = 340 \\] 3. Multiply 17 by 3: \\[ 17 \\times 3 = 51 \\] 4. Add the results: \\[ 340 + 51 = 391 \\] So, \\[ 17 \\times 23 = 391 \\]",
+  "Reply with exactly the word: ok": "ok"
+}
