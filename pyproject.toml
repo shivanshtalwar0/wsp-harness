@@ -5,19 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "weight-space-programming"
 version = "0.1.0"
-description = "Weight-Space Programming experiments on a 4-bit 27B coding agent"
+description = "Weight-Space Programming: a live weight-editing lab for frontier-model analysts, plus 4-bit 27B tooling"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "safetensors>=0.4", "ml_dtypes>=0.4", "pyyaml>=6"]
 
 [project.optional-dependencies]
 verify = ["mlx"]
+lab = ["torch>=2.4", "transformers>=4.51", "accelerate", "datasets", "fastapi", "uvicorn[standard]", "httpx", "mcp>=2"]
 dev = ["pytest>=7"]
 
 [project.scripts]
 wsp = "wsp.cli:main"
 
 [tool.setuptools]
-packages = ["wsp", "evals"]
+packages = ["wsp", "wsp.lab", "evals"]
+
+[tool.setuptools.package-data]
+"wsp.lab" = ["viewer/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

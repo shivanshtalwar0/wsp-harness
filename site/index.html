@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>wsp-harness · let a frontier model edit a language model's weights</title>
+  <meta name="description" content="A Weight-Space Programming lab: Claude Opus or Fable reads and edits Qwen3-4B's weights directly, with metered forward passes, controls, and a live 3D view." />
+  <meta property="og:title" content="wsp-harness" />
+  <meta property="og:description" content="Claude as the analyst: read and edit a live model's weights, no training." />
+  <meta property="og:image" content="img/viewer-edits.png" />
+  <style>
+    :root {
+      --bg: #07090d; --panel: #0e1218; --line: #1d2430; --text: #d9e1ec; --muted: #8592a5;
+      --accent: #ffb547; --cool: #5ac8fa;
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+      --sans: ui-sans-serif, -apple-system, "Inter", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--bg); color: var(--text); font: 16px/1.6 var(--sans); }
+    body { margin: 0; }
+    a { color: var(--cool); }
+    main { max-width: 1080px; margin: 0 auto; padding: 0 24px 96px; }
+    header.hero { padding: 88px 0 40px; }
+    .kicker { font: 12px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+    h1 { font-size: clamp(34px, 5vw, 58px); line-height: 1.06; margin: 14px 0 18px; letter-spacing: -0.02em; font-weight: 650; }
+    h1 em { font-style: normal; color: var(--accent); }
+    .lede { font-size: 19px; color: #b8c3d3; max-width: 760px; }
+    .cta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+    .btn { display: inline-block; padding: 11px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; }
+    .btn.primary { background: var(--accent); color: #1a1205; }
+    .btn.ghost { border: 1px solid var(--line); color: var(--text); }
+    figure.shot { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #000; }
+    figure.shot img { display: block; width: 100%; }
+    figure figcaption { padding: 10px 14px; font-size: 13px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
+    h2 { font-size: 26px; margin: 72px 0 12px; letter-spacing: -0.01em; }
+    h2 .n { font: 13px var(--mono); color: var(--accent); margin-right: 10px; vertical-align: 3px; }
+    p { color: #c3ccd9; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 18px; }
+    .card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 16px 18px; }
+    .card h3 { margin: 0 0 6px; font-size: 15px; }
+    .card p { margin: 0; font-size: 14px; color: var(--muted); }
+    .card code { color: var(--cool); }
+    pre { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; overflow-x: auto; font: 13.5px/1.6 var(--mono); color: #cfe3f7; }
+    pre .c { color: #66758a; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { font: 12px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    td code { color: var(--cool); font-size: 13px; }
+    .metered { color: var(--accent); font: 12px var(--mono); }
+    .warn { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 18px 0; }
+    .results td:nth-child(n+2) { font-family: var(--mono); }
+    footer { border-top: 1px solid var(--line); margin-top: 80px; padding-top: 24px; font-size: 13px; color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <div class="kicker">weight-space programming · harness</div>
+    <h1>Let a frontier model <em>edit a language model's weights</em> directly.</h1>
+    <p class="lede">
+      <code>wsp-harness</code> keeps Qwen3-4B resident in full precision and hands Claude Opus or Fable
+      the paper's analyst setup: a Python sandbox over the live weights, a metered budget of forward
+      passes, structured edits with checkpoints and controls, and a held-out evaluation it never sees.
+      No training. No gradients. Every neuron, edit, and tool call shows up live in 3D.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="demo/">Open the 3D replay →</a>
+      <a class="btn ghost" href="https://github.com/shivanshtalwar0/wsp-harness">GitHub</a>
+      <a class="btn ghost" href="https://rikiyat.github.io/blog/weight-space-programming/">The paper</a>
+    </div>
+  </header>
+
+  <figure class="shot">
+    <img src="img/viewer-edits.png" alt="3D view of Qwen3-4B: 36 layer slabs of MLP neurons, edited neurons glowing orange" />
+    <figcaption>Edits mode on Qwen3-4B: 36 layers × 9,728 MLP neurons, plus 32 attention heads per layer. Orange marks columns that differ from the base model.</figcaption>
+  </figure>
+
+  <h2><span class="n">01</span>What it is</h2>
+  <p>
+    In <a href="https://rikiyat.github.io/blog/weight-space-programming/">Sparks of Weight-Space Programming</a>
+    (Takehi, Teoh, Zhang, Khattab, 2026), an analyst model raised Qwen3.5-0.8B's MATH-500 score from 7.9% to
+    48.1% by editing 0.016% of its weights. It did this with only a notebook over the weights and 50 metered
+    forward passes. This repo rebuilds that harness so the analyst is Claude, the patient is a bigger model,
+    and the operator can watch.
+  </p>
+  <div class="grid">
+    <div class="card"><h3>Live weight sandbox</h3><p><code>W[name][:, cols] -= …</code> edits the running model in place. A pristine base copy makes every change diffable and reversible.</p></div>
+    <div class="card"><h3>Metered forward passes</h3><p>One pass = up to 512 graded generations or 1,024 reads with activation capture, exactly as in the paper. Analysis in the sandbox is free.</p></div>
+    <div class="card"><h3>Controls built in</h3><p><code>control="random"</code> re-applies an edit with a random direction. <code>steer=</code> applies the same direction at inference time, so a weight edit can't hide a plain steering vector.</p></div>
+    <div class="card"><h3>Analyst over MCP only</h3><p>Claude runs headless with <code>--tools ""</code>: no shell, no files, no web. It gets twelve lab tools. Held-out evaluation and export stay with the operator.</p></div>
+  </div>
+
+  <h2><span class="n">02</span>Seeing inside</h2>
+  <div class="grid">
+    <figure class="shot"><img src="img/viewer-weights.png" alt="weights mode" /><figcaption>Weights: ‖down_proj column‖, how much each neuron can write.</figcaption></figure>
+    <figure class="shot"><img src="img/viewer-activations.png" alt="activations mode" /><figcaption>Activations: mean |activation| over 64 MATH problems from the last capture pass.</figcaption></figure>
+  </div>
+  <figure class="shot" style="margin-top:16px">
+    <img src="img/viewer-neuron.png" alt="neuron inspector" />
+    <figcaption>Click a neuron: write norm, edit state, last activation, and the tokens its column promotes or suppresses (logit lens). The right panel streams the analyst's calls and notes.</figcaption>
+  </figure>
+
+  <h2><span class="n">03</span>The analyst's tools</h2>
+  <table>
+    <tr><th>tool</th><th>what it does</th></tr>
+    <tr><td><code>lab_info</code></td><td>architecture, tensor families and shapes, limits, capture sites, rules</td></tr>
+    <tr><td><code>python</code></td><td>persistent sandbox: <code>W</code>, <code>acts</code>, <code>last_gen</code>, numpy, torch, <code>logit_lens</code>, <code>top_singular</code>, <code>cos</code>…</td></tr>
+    <tr><td><code>forward_generate</code> <span class="metered">1 pass</span></td><td>answers practice problems; accuracy with Wilson CI, truncation and loop rates; optional steering</td></tr>
+    <tr><td><code>forward_read</code> <span class="metered">1 pass</span></td><td>teacher-forced read; captures residual stream, MLP activations, attention heads into <code>acts</code></td></tr>
+    <tr><td><code>apply_patch</code></td><td><code>project_out</code>, <code>add_rank1</code>, <code>col_gain</code>, <code>row_gain</code>, <code>zero_cols</code>; fidelity report; random control</td></tr>
+    <tr><td><code>weight_diff</code> · <code>checkpoint</code> · <code>restore</code></td><td>what changed vs base (elements, columns, edit rank); save and roll back states</td></tr>
+    <tr><td><code>note</code> · <code>budget</code> · <code>practice_problems</code></td><td>hypotheses and verdicts for the operator; passes left; practice items</td></tr>
+  </table>
+
+  <h2><span class="n">04</span>Run it</h2>
+<pre><span class="c"># install (Python 3.10+, ~10 GB free for Qwen3-4B; Apple Silicon, CUDA or CPU)</span>
+git clone https://github.com/shivanshtalwar0/wsp-harness && cd wsp-harness
+pip install -e ".[lab,dev]"
+
+<span class="c"># 1. the lab + 3D viewer at http://127.0.0.1:8765/</span>
+python -m wsp.lab serve --model Qwen/Qwen3-4B --budget 50
+
+<span class="c"># 2. baseline on the held-out split (MATH-500)</span>
+python -m wsp.lab eval --n 200
+
+<span class="c"># 3. Claude as the analyst (Opus by default; pass claude-fable-5-2 for Fable)</span>
+scripts/run_analyst.sh
+
+<span class="c"># 4. did it help? then export the edit</span>
+python -m wsp.lab eval --n 500 --checkpoint final
+python -m wsp.lab export --full-model</pre>
+  <p>No download handy? <code>--model tiny-qwen3 --device cpu --dtype float32 --practice toy --eval toy</code> runs a 4-layer random model offline.</p>
+
+  <h2><span class="n">05</span>The replay's session</h2>
+  <p>
+    The <a href="demo/">3D replay</a> is a snapshot of a <strong>scripted</strong> round
+    (<code>scripts/demo_session.py</code>), not an analyst run. A fixed recipe exercised every part of the
+    harness once on real data. In layers 15 and 19 it projected the top singular direction of the 64 most
+    active <code>down_proj</code> columns out of those columns, then re-measured and ran the random control.
+  </p>
+  <table class="results">
+    <tr><th>condition</th><th>accuracy (16 MATH practice items)</th><th>95% CI</th><th>hit token limit</th></tr>
+    <tr><td>baseline</td><td>11 / 16 · 68.8%</td><td>44–86%</td><td>25%</td></tr>
+    <tr><td>recipe edit (layers 15, 19)</td><td>12 / 16 · 75.0%</td><td>51–90%</td><td>19%</td></tr>
+    <tr><td>random-direction control</td><td>11 / 16 · 68.8%</td><td>44–86%</td><td>25%</td></tr>
+  </table>
+  <p>
+    One problem's difference, with fully overlapping intervals: <strong>not evidence of an effect</strong>,
+    and the replay's verdict note says so. The edit landed exactly as written (fidelity 0.9998 and 1.0 in
+    bf16, about 300k weights, 0.0075% of the model). Each 16-problem generation pass took about 3 minutes
+    on an M5 Pro. A real round is the analyst's job: diagnose a suppressor first, then edit with a
+    hypothesis, at a sample size where the intervals can separate.
+  </p>
+
+  <h2><span class="n">06</span>What it can and can't do</h2>
+  <div class="warn">
+    <p><strong>This is not distillation.</strong> Claude's knowledge doesn't flow into Qwen's weights; only the
+    edits it reasons its way to do. The paper's own control found that weight edits remove obstacles hiding
+    an ability (loops, truncation, format drift) but do not add an ability the model lacks.</p>
+  </div>
+  <p>
+    Expect gains where the baseline shows a suppressor, and honest nulls elsewhere. If you want a frontier
+    model's skill transferred wholesale, that's fine-tuning. Use the lab to find <em>what</em> to train.
+    The sandbox is a convenience boundary, not a security one: the analyst's Python runs in the lab
+    process, and the ledger records every call. In bf16, edits under ~0.4% of a weight's magnitude round
+    away; <code>apply_patch</code> reports the fidelity, and <code>--dtype float32</code> avoids the rounding.
+  </p>
+
+  <footer>
+    Built on <a href="https://rikiyat.github.io/blog/weight-space-programming/">Sparks of Weight-Space Programming</a>
+    (Takehi, Teoh, Zhang, Khattab, MIT CSAIL, 2026). Model: <a href="https://huggingface.co/Qwen/Qwen3-4B">Qwen/Qwen3-4B</a>.
+    Viewer: three.js. Source: <a href="https://github.com/shivanshtalwar0/wsp-harness">github.com/shivanshtalwar0/wsp-harness</a>.
+  </footer>
+</main>
+</body>
+</html>

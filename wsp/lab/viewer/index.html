@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>wsp lab · weight space</title>
+  <link rel="stylesheet" href="static/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <aside id="panel">
+    <header>
+      <h1>weight space</h1>
+      <div id="model" class="muted">connecting…</div>
+      <div id="replay" class="replay small hidden">Replay of a recorded session on Qwen3-4B. Click any orange (edited) or bright neuron.
+        <a href="../">About the harness</a></div>
+    </header>
+
+    <section>
+      <div class="row between">
+        <span class="label">forward passes</span>
+        <span id="budget-text" class="mono">–</span>
+      </div>
+      <div class="meter"><div id="budget-bar"></div></div>
+    </section>
+
+    <section>
+      <span class="label">color by</span>
+      <div class="seg" id="modes">
+        <button data-mode="weights" class="on">weights</button>
+        <button data-mode="edits">edits</button>
+        <button data-mode="activations">activations</button>
+      </div>
+      <p id="mode-help" class="muted small"></p>
+      <label class="slider">gain <input id="gain" type="range" min="0.25" max="4" step="0.05" value="1" /></label>
+      <label class="slider">layers <input id="lo" type="range" min="0" max="0" value="0" /><input id="hi" type="range" min="0" max="0" value="0" /></label>
+      <div id="layer-range" class="muted small mono"></div>
+    </section>
+
+    <section id="inspect" class="hidden">
+      <span class="label">neuron</span>
+      <div id="inspect-body"></div>
+    </section>
+
+    <section class="grow">
+      <div class="row between"><span class="label">analyst activity</span><span id="n-events" class="muted small mono"></span></div>
+      <ol id="events"></ol>
+    </section>
+
+    <section>
+      <span class="label">notes</span>
+      <ol id="notes"></ol>
+    </section>
+  </aside>
+
+  <div id="hud" class="mono small"></div>
+  <script type="module" src="static/app.js"></script>
+</body>
+</html>

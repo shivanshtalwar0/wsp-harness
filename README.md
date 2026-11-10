@@ -6,6 +6,40 @@ Built from [Sparks of Weight-Space Programming](https://rikiyat.github.io/blog/w
 
 ---
 
+## The live lab: Claude Opus / Fable as the analyst (`wsp.lab`)
+
+**[Project page and 3D replay](https://shivanshtalwar0.github.io/wsp-harness/)**
+
+![Qwen3-4B in the 3D viewer: 36 layers of MLP neurons, edited neurons in layers 15 and 19 glowing orange](site/img/viewer-edits.png)
+
+A rebuild of the paper's Experiment-8 harness for a frontier analyst. A full-precision model
+(default **Qwen/Qwen3-4B**) stays resident. The analyst gets, over MCP and nothing else:
+
+- a Python sandbox over the live weights (no gradients);
+- a metered budget of forward passes on practice data, with activation capture and steering;
+- Patch-IR edits with fidelity reports, plus the random-direction control;
+- checkpoints and diffs against the base model.
+
+The held-out evaluation stays with you. A 3D viewer shows every neuron, every edit and every
+analyst call as it happens.
+
+```bash
+pip install -e ".[lab,dev]"
+python -m wsp.lab serve --model Qwen/Qwen3-4B --budget 50   # viewer at http://127.0.0.1:8765/
+python -m wsp.lab eval --n 200                              # baseline, held-out
+scripts/run_analyst.sh                                      # Opus; add "<objective>" claude-fable-5-2 for Fable
+python -m wsp.lab eval --n 500 --checkpoint final           # did it help?
+```
+
+| weights | activations | neuron inspector |
+|---|---|---|
+| ![](site/img/viewer-weights.png) | ![](site/img/viewer-activations.png) | ![](site/img/viewer-neuron.png) |
+
+Details, tool list, controls, and limits: [`docs/05-lab.md`](docs/05-lab.md). The rest of this
+README covers the original 4-bit 27B work.
+
+---
+
 ## Read this before you run anything
 
 The goal you asked for was: edit Qwen3.8-27B's weights, iteratively, until its agentic and
@@ -133,6 +167,18 @@ wsp/
   analyst.py   weight atlas, analytic baseline, LLM proposal + validation
   verify.py    patch fidelity: what the 4-bit grid kept of the edit
   cli.py       the commands above
+  lab/         the live lab (docs/05-lab.md)
+    session.py   Lab: model + sandbox + budget + checkpoints + ledger
+    forward.py   metered generate/read, activation capture, steering
+    edits.py     base copy, diff, checkpoints, Patch-IR ops in torch, random control
+    sandbox.py   the analyst's Python namespace over live weights
+    data.py      practice/eval splits (GSM8K, MATH-500, jsonl) and grading
+    server.py    HTTP: /api (analyst), /admin (operator), /viz + 3D viewer
+    mcp_server.py  MCP proxy exposing analyst tools only
+    viewer/      three.js weight-space view
+prompts/analyst.md   system prompt for the Opus / Fable analyst
+scripts/run_analyst.sh  headless analyst run (MCP tools only, no shell)
+lab.mcp.json         MCP config for the lab
 evals/
   harness.py   agent loop, sandbox, hidden-test grading
   mock.py      scripted models for offline tests

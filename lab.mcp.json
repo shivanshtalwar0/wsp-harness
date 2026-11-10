@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wsp-lab": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "wsp.lab", "mcp"],
+      "env": { "WSP_LAB_URL": "http://127.0.0.1:8765" }
+    }
+  }
+}
