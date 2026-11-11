@@ -257,3 +257,39 @@ def test_extract_nested_boxed_and_wilson():
     assert extract_answer("\\boxed{\\sqrt{2}}") == "\\sqrt{2}"
     lo, hi = wilson(10, 20)
     assert lo < 0.5 < hi
+
+
+def test_viewer_never_blocks_behind_a_forward_pass(lab):
+    """A long analyst call holds the model lock; the viewer must still answer at once."""
+    import threading
+    import time
+
+    lab.viz_layers("edits")                       # warm the cache
+    started, release = threading.Event(), threading.Event()
+
+    def long_call():
+        def fn():
+            started.set()
+            release.wait(10)
+            return {"ok": True}
+        lab._call("forward_generate", {}, fn)
+
+    t = threading.Thread(target=long_call)
+    t.start()
+    started.wait(5)
+    try:
+        t0 = time.time()
+        st = lab.viz_state()
+        w = lab.viz_layers("weights")
+        e = lab.viz_layers("edits")
+        a = lab.viz_layers("activations")         # never computed: falls back to empty
+        n = lab.viz_neuron(1, 0)
+        assert time.time() - t0 < 1.5
+        assert st["running"]["tool"] == "forward_generate"
+        assert "busy" not in w and e["busy"] and a["busy"] and n["busy"]
+        assert a["neurons"] == 192 and a["layers"] == 4
+    finally:
+        release.set()
+        t.join()
+    assert lab.viz_state()["running"] is None
+    assert "busy" not in lab.viz_layers("edits")

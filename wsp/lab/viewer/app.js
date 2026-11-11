@@ -268,7 +268,12 @@ async function loadLayers() {
   }
   S.mlp = f32(d.mlp);
   S.head = f32(d.head);
+  S.stale = !!d.busy;   // lab was mid-pass: re-fetch when it frees up
   recolor();
+}
+
+function fmtSecs(t) {
+  return t < 60 ? `${Math.round(t)}s` : `${Math.floor(t / 60)}m ${Math.round(t % 60)}s`;
 }
 
 function esc(s) {
@@ -285,6 +290,8 @@ async function poll() {
     $("budget-text").textContent = `${b.used} / ${b.total}`;
     $("budget-bar").style.width = `${(100 * b.used) / Math.max(1, b.total)}%`;
     $("n-events").textContent = `${st.n_events} calls`;
+    $("status").textContent = st.running ? `running ${st.running.tool} · ${fmtSecs(st.running.secs)}` : "";
+    if (!st.running && S.stale && !STATIC) await loadLayers();
     const fresh = st.events;
     if (fresh.length) {
       const ol = $("events");
@@ -335,6 +342,12 @@ async function inspect(layer, idx, p) {
   recolor();
   const d = await api.neuron(layer, idx);
   $("inspect").classList.remove("hidden");
+  if (d && d.busy) {
+    const r = d.running ? `${d.running.tool} (${fmtSecs(d.running.secs)})` : "a forward pass";
+    $("inspect-body").innerHTML = `<p class="small muted">The lab is busy running ${esc(r)}.
+      Click the neuron again when it finishes.</p>`;
+    return;
+  }
   if (!d) {
     $("inspect-body").innerHTML = `<p class="small muted">layer ${layer} · neuron ${idx} is not in this snapshot.
       The replay includes edited neurons and the most active / strongest neurons per layer.
@@ -386,9 +399,9 @@ function hud() {
 
 // ---------------------------------------------------------------- start
 resize();
+await poll();          // never blocks: the header and activity feed show up immediately
 await loadLayers();
 hud();
-await poll();
 if (!STATIC) setInterval(poll, 2000);
 else $("replay").classList.remove("hidden");
 window.wspViewer = { S, inspect, loadLayers, camera, controls,

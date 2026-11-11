@@ -62,7 +62,8 @@ class Lab:
         self.events: list[dict] = []
         self.notes: list[dict] = []
         self.last_mlp_acts: dict[int, torch.Tensor] = {}
-        self._base_viz: dict | None = None
+        self._viz_cache: dict[str, dict] = {}
+        self._running: dict | None = None
         (self.dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
 
     # ------------------------------------------------------------- logging
@@ -76,12 +77,19 @@ class Lab:
     def _call(self, tool: str, args: dict, fn):
         t0 = time.time()
         with self.lock:
+            self._running = {"tool": tool, "since": t0}
             try:
                 res = fn()
             except Exception as e:
                 res = {"error": f"{type(e).__name__}: {e}"}
+            finally:
+                self._running = None
             self._log(tool, args, res, t0)
             return res
+
+    def running(self) -> dict | None:
+        r = self._running
+        return {"tool": r["tool"], "secs": round(time.time() - r["since"], 1)} if r else None
 
     # ------------------------------------------------------- analyst tools
     def info(self) -> dict:
@@ -305,17 +313,52 @@ class Lab:
             return self.budget.to_json()
 
     # --------------------------------------------------------------- viewer
-    @torch.no_grad()
+    VIZ_LOCK_WAIT = 0.25   # seconds the viewer will wait for the model lock
+
     def viz_layers(self, mode: str = "weights") -> dict:
-        """Per-layer arrays for the 3D view: one value per MLP neuron and per attention head."""
-        with self.lock:
+        """Per-layer arrays for the 3D view: one value per MLP neuron and per attention head.
+
+        Never blocks behind a forward pass: 'weights' reads only the immutable base copy,
+        and the live modes fall back to their last result (``busy: true``) while the
+        analyst holds the model.
+        """
+        if mode not in ("weights", "edits", "activations"):
+            raise ValueError("mode must be weights, edits or activations")
+        if mode == "weights":
+            if "weights" not in self._viz_cache:
+                self._viz_cache["weights"] = self._viz_compute("weights")
+            return self._viz_cache["weights"]
+        if not self.lock.acquire(timeout=self.VIZ_LOCK_WAIT):
+            cached = self._viz_cache.get(mode) or self._viz_empty(mode)
+            return {**cached, "busy": True, "running": self.running()}
+        try:
+            self._viz_cache[mode] = self._viz_compute(mode)
+            return self._viz_cache[mode]
+        finally:
+            self.lock.release()
+
+    def _viz_empty(self, mode: str) -> dict:
+        import base64
+
+        import numpy as np
+
+        tc = self.lm.text_config()
+        L, heads = self.lm.n_layers(), int(getattr(tc, "num_attention_heads", 0) or 0)
+        neurons = int(getattr(tc, "intermediate_size", 0) or 0)
+        z = np.zeros((L, neurons), np.float32)
+        h = np.zeros((L, heads), np.float32)
+        return {"mode": mode, "layers": L, "neurons": neurons, "heads": heads,
+                "mlp": base64.b64encode(z.tobytes()).decode(), "head": base64.b64encode(h.tobytes()).decode(),
+                "mlp_max": 0.0, "head_max": 0.0}
+
+    @torch.no_grad()
+    def _viz_compute(self, mode: str) -> dict:
+        if True:
             lm = self.lm
             L = lm.n_layers()
             tc = lm.text_config()
             heads = int(getattr(tc, "num_attention_heads", 0) or 0)
             mlp_rows, head_rows = [], []
-            if mode == "weights" and self._base_viz is not None:
-                return self._base_viz
             for i in range(L):
                 down = lm.layer_tensor(i, "mlp.down_proj.weight")
                 o = lm.layer_tensor(i, "self_attn.o_proj.weight")
@@ -358,13 +401,19 @@ class Lab:
                 "mlp_max": float(mlp.max()) if mlp.size else 0.0,
                 "head_max": float(hd.max()) if hd.size else 0.0,
             }
-            if mode == "weights":
-                self._base_viz = res
             return res
 
-    @torch.no_grad()
     def viz_neuron(self, layer: int, idx: int) -> dict:
-        with self.lock:
+        if not self.lock.acquire(timeout=self.VIZ_LOCK_WAIT):
+            return {"layer": layer, "neuron": idx, "busy": True, "running": self.running()}
+        try:
+            return self._viz_neuron(layer, idx)
+        finally:
+            self.lock.release()
+
+    @torch.no_grad()
+    def _viz_neuron(self, layer: int, idx: int) -> dict:
+        if True:
             lm = self.lm
             down = lm.layer_tensor(layer, "mlp.down_proj.weight")
             col = lm.params()[down].data[:, idx].float()
@@ -393,6 +442,7 @@ class Lab:
             "events": self.events[since:][-200:], "n_events": len(self.events),
             "notes": self.notes[-50:],
             "checkpoints": [c["tag"] for c in self.ledger.list_checkpoints()],
+            "running": self.running(),
         }
 
     # ----------------------------------------------------------------- misc
