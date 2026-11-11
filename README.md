@@ -29,17 +29,27 @@ validation and the analyst's calls as they happen.
 In the viewer, each MLP neuron is one column of `mlp.down_proj` (`[2560, 9728]`): 350,208
 points in all, plus 1,152 attention heads.
 
-**Where it has room to improve** (measured here, non-thinking, greedy, 1,024-token cap):
+**Set the token cap first.** Measured on an RTX 5090 (non-thinking, greedy, bf16):
 
-| practice set | accuracy | answers cut off at the cap |
-|---|---|---|
-| GSM8K train, 8 items | 8/8 | 0%: saturated, nothing to fix |
-| MATH train, 16 items | 11/16 (69%) | 25% |
-| MATH train, 64 items (Opus baseline) | 70.3% [58–80] | 21.9% |
+| set | cap 1,024 | cap 4,096 | answers cut off (1,024 → 4,096) |
+|---|---|---|---|
+| MATH-500, first 200 (held-out test) | 67.5% [61–74] | **82.0% [76–87]** | 26% → 3.5% |
+| MATH train, 64 items (Opus practice set) | 76.6% [65–85] | **90.6% [81–96]** | 21.9% → 1.6% |
 
-So the defaults are the paper's pairing: practice on MATH train, validate on MATH test minus
-MATH-500, and score on MATH-500. The truncated answers are the kind of obstacle the paper says
-an edit can remove. Ordinary reasoning errors are not.
+On MATH-500, the larger cap rescued 30 problems and lost 1 (paired sign test p ≈ 3×10⁻⁸). Of 52
+answers cut off at 1,024, 45 finish at 4,096 and 32 are right. So the default is now
+`--max-new-tokens 4096`. At 1,024, about a fifth of the "errors" were the cap, not the model.
+That is also why an earlier Opus run, at 1,024, concluded that truncated answers marked hard
+problems.
+
+With truncation gone, what remains on MATH is mostly ordinary reasoning errors, which the paper
+says edits do not fix. Two targets keep real headroom: **a fixed short budget** (the 1,024-cap
+gap is about 14 points, so the edit to find makes reasoning shorter without losing accuracy) and
+**your own task** where Qwen3-4B has a format, loop or instruction-following failure
+(`jsonl:<path>`). GSM8K is saturated (8/8 at 1,024).
+
+The default pairing follows the paper: practice on MATH train, validate on MATH test minus
+MATH-500, and score on MATH-500.
 
 ---
 
@@ -106,18 +116,28 @@ fooling yourself mid-run, and MATH-500 stays untouched for the final answer.
 | option | default | what it does |
 |---|---|---|
 | length-sorted batching | always | groups prompts of similar length, so less padding is wasted |
-| `--batch-size` | auto: 64 on CUDA, 16 otherwise | sequences per batch |
+| `--batch-size` | auto: sized from free GPU memory and the KV cache of a full-length answer on CUDA (cap 64), 16 otherwise | sequences per batch |
 | `--attn` | `auto` | FlashAttention-2 on CUDA when `flash-attn` is installed, else PyTorch SDPA |
 | TF32 matmuls | on, on CUDA | float32 analysis and logits run on tensor cores |
 | `--compile` | off | static KV cache + `torch.compile` for decoding (CUDA). In-place edits keep tensor addresses, so compiled graphs stay valid. |
-| `--gen-backend vllm` | `hf` | vLLM generation, typically an order of magnitude faster. The HF model stays the source of truth; before each generation, the lab pushes only the tensors that changed since the last sync, including tensors restored to base. Steering falls back to HF. **Experimental: the sync logic is unit-tested, but vLLM itself has not yet been run on CUDA.** |
+| `--gen-backend vllm` | `hf` | vLLM generation: 5–10× faster on the rig (table below). The HF model stays the source of truth; before each generation, the lab pushes only the tensors that changed since the last sync, including tensors restored to base. The vLLM worker then reads its own parameters back and the lab checks them against HF, refusing to generate on a mismatch. Steering falls back to HF. Needs `ninja` and `nvcc` on `PATH` (FlashInfer compiles its sampler on first start). |
 | `--base-device cpu` | same device as the model | keeps the pristine base copy off the GPU (useful with vLLM's second model copy) |
 
-GPU memory, roughly: the HF backend needs 2× the model (live + base) plus activations, about
-20 GB for Qwen3-4B, or about 12 GB with `--base-device cpu`. vLLM adds another 8 GB plus its KV
-cache. Measured on an Apple M5 Pro (MPS, bf16): a capture pass over all 36 layers takes about 4 s.
-A 16-problem generation pass at 1,024 tokens takes about 90–180 s, since generation dominates
-every pass.
+Measured on an RTX 5090 (32 GB), same 64 MATH practice problems, greedy, bf16:
+
+| backend | cap 1,024 | cap 4,096 | accuracy at 4,096 |
+|---|---|---|---|
+| HF (`--base-device cpu`, auto batch 17) | 118 s | 463 s | 90.6% |
+| vLLM (`--vllm-gpu-mem 0.5`, 50k-token KV cache) | **23.5 s** | **45.6 s** | 89.1% |
+
+The accuracy gap is within noise: two kernels doing greedy decoding drift apart over long
+outputs. The 200-problem MATH-500 eval at 4,096 took 26 min on HF. The per-edit validation
+(answer loss on 128 items) takes about 3 s on the 5090 vs 27 s on an Apple M5 Pro.
+
+GPU memory: the HF model takes about 10–11 GB with `--base-device cpu` (about 20 GB without);
+vLLM at `--vllm-gpu-mem 0.5` takes 16 GB, of which 6.9 GB is KV cache. Stop a vLLM lab by its
+process group (start it under `setsid`, then `kill -- -<pid>`), or vLLM's engine process can
+outlive the server and keep its memory.
 
 ---
 
@@ -158,9 +178,12 @@ shell, file or web access. The tools: `lab_info`, `python` (sandbox: `W`, `acts`
 - **Scripted demo round** (`scripts/demo_session.py`, a fixed recipe, not an analyst): baseline
   11/16, edit 12/16, random control 11/16 on MATH practice. The intervals overlap: a null
   result, reported as one.
-- **First Opus run** (25 passes): in progress. It found that ~22% of answers truncate at the
-  token cap, and showed that a "be concise" steering direction cut truncation (21.9% → 9.4%) but
-  *lowered* accuracy (70.3% → 64.1%). It is now testing a token-level edit.
+- **First Opus run** (budget 25 passes, used 7, $3.67, 1,024-token cap): baseline 70.3% on 64
+  practice items. A "be concise" steering direction cut truncation (21.9% → 9.4%) but *lowered*
+  accuracy (70.3% → 64.1%); suppressing markdown tokens did nothing measurable. It recommended
+  the unmodified base. Audit: practice data only, no held-out access. Its premise, that
+  truncated answers were the hard ones, did not hold: raising the cap rescued most of them (above).
+- **No weight edit has beaten the base model yet.** The one large gain so far is a setting.
 
 ## Limits, stated plainly
 

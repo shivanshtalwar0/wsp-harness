@@ -403,16 +403,23 @@ class _FakeReq:
 class _FakeLLM:
     """Stands in for vllm.LLM: records weight pushes and returns canned completions."""
 
-    def __init__(self):
+    def __init__(self, corrupt: bool = False):
         self.pushes: list[list[str]] = []
         self.values: dict = {}
+        self.corrupt = corrupt
 
     def collective_rpc(self, method, args=()):
         assert method == "wsp_load_weights"
+        from wsp.lab.engines import unpack
+
         (payload,) = args
-        self.pushes.append([n for n, _ in payload])
-        self.values.update({n: t.clone() for n, t in payload})
-        return [len(payload)]
+        assert all(isinstance(x[3], bytes) for x in payload)   # no tensors cross the RPC boundary
+        items = [unpack(x) for x in payload]
+        self.pushes.append([n for n, _ in items])
+        self.values.update(dict(items))
+        from wsp.lab.engines import checksum
+
+        return [{n: checksum(t + 1.0 if self.corrupt else t) for n, t in items}]   # one dict per worker
 
     def generate(self, texts, sp, use_tqdm=False):
         return [_FakeReq(_FakeOut("so \\boxed{1}", [1, 2, 3], "stop")) for _ in texts]
@@ -427,6 +434,15 @@ def fake_vllm(monkeypatch):
     mod.SamplingParams = lambda **kw: kw
     monkeypatch.setitem(sys.modules, "vllm", mod)
     return mod
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+def test_weight_pack_roundtrip(dtype):
+    from wsp.lab.engines import pack, unpack
+
+    t = torch.randn(3, 5).to(dtype)
+    name, back = unpack(pack("w", t.t()))                    # non-contiguous input
+    assert name == "w" and back.dtype == dtype and torch.equal(back, t.t())
 
 
 def test_vllm_engine_syncs_changed_and_reverted_tensors(lab, fake_vllm):
@@ -446,6 +462,16 @@ def test_vllm_engine_syncs_changed_and_reverted_tensors(lab, fake_vllm):
     lab.forward_generate(practice_n=2, max_new_tokens=4)
     assert fake.pushes[-1] == [DOWN1]                         # reverted tensor pushed back to base
     assert torch.equal(fake.values[DOWN1], lab.ledger.base[DOWN1].cpu())
+    assert lab.engine.syncs[-1]["verified"] == 1
+
+
+def test_vllm_engine_refuses_to_generate_from_unverified_weights(lab, fake_vllm):
+    from wsp.lab.engines import VLLMEngine
+
+    lab.engine = VLLMEngine(lab.lm, "tiny", llm=_FakeLLM(corrupt=True))
+    lab.python(f"W['{DOWN1}'][:, 0] += 1.0")
+    out = lab.forward_generate(practice_n=2, max_new_tokens=4)
+    assert "mismatch" in str(out.get("error", ""))
 
 
 def test_steering_bypasses_vllm(lab, fake_vllm):

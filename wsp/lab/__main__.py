@@ -40,7 +40,8 @@ def main(argv=None) -> int:
     s.add_argument("--budget", type=int, default=50)
     s.add_argument("--max-generate", type=int, default=512)
     s.add_argument("--max-read", type=int, default=1024)
-    s.add_argument("--max-new-tokens", type=int, default=2048)
+    s.add_argument("--max-new-tokens", type=int, default=4096,
+                   help="generation cap; 1024 cut off 22%% of Qwen3-4B MATH answers, 4096 cuts off ~2%%")
     s.add_argument("--batch-size", type=int, default=0, help="0 = auto (64 on CUDA, 16 otherwise)")
     s.add_argument("--practice", default="math:train", help="math:train | gsm8k:train | jsonl:<path> | toy")
     s.add_argument("--eval", default="math500", help="math500 | gsm8k:test | math:test | jsonl:<path> | toy")
@@ -55,6 +56,8 @@ def main(argv=None) -> int:
     s.add_argument("--compile", action="store_true", help="static KV cache + torch.compile (CUDA)")
     s.add_argument("--gen-backend", default="hf", choices=["hf", "vllm"],
                    help="vllm: CUDA-only fast generation with live weight sync (experimental)")
+    s.add_argument("--vllm-gpu-mem", type=float, default=0.5,
+                   help="share of GPU memory for vLLM's weights + KV cache (the HF model needs the rest)")
     s.add_argument("--host", default="127.0.0.1", help="0.0.0.0 or a LAN IP to serve other machines")
     s.add_argument("--token", default=os.environ.get("WSP_LAB_TOKEN"),
                    help="required by every request; auto-generated when --host is not loopback")
@@ -97,7 +100,7 @@ def main(argv=None) -> int:
             batch_size=a.batch_size, practice=a.practice, eval=a.eval, thinking=a.thinking,
             run_dir=a.run_dir, base_device=a.base_device, val=a.val, val_n=a.val_n,
             val_gen_n=a.val_gen_n, val_visible=a.val_visible, attn=a.attn, compile=a.compile,
-            gen_backend=a.gen_backend,
+            gen_backend=a.gen_backend, vllm_gpu_mem=a.vllm_gpu_mem,
         )
         token = a.token
         if not token and a.host not in ("127.0.0.1", "localhost", "::1"):
@@ -109,7 +112,8 @@ def main(argv=None) -> int:
         print(f"session {lab.session} -> {lab.dir}\nviewer  http://{shown}:{a.port}/{q}", file=sys.stderr)
         if token:
             print(f"token   {token}   (clients: export WSP_LAB_TOKEN=...)", file=sys.stderr)
-        uvicorn.run(create_app(lab, token), host=a.host, port=a.port, log_level="warning")
+        uvicorn.run(create_app(lab, token), host=a.host, port=a.port, log_level="warning",
+                    timeout_graceful_shutdown=3)   # open viewer streams (SSE) never end on their own
         return 0
     if a.cmd == "eval":
         return _admin(a.url, "evaluate", {"n": a.n, "seed": a.seed, "checkpoint": a.checkpoint,

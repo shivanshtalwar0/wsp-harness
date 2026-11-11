@@ -6,27 +6,53 @@ where nearly all of a pass's time goes. Before every generation the engine pushe
 tensors that changed since the last sync, *including tensors restored to base*, so
 vLLM always generates from exactly the weights the analyst is looking at.
 
-Status: experimental. The sync bookkeeping is unit-tested with a fake engine; the vLLM
-calls themselves need a CUDA machine to verify (none was available when this was
-written). Memory: two model copies on the GPU (HF + vLLM) plus vLLM's KV cache; run
-the lab with ``--base-device cpu`` to keep the pristine copy off the GPU.
+Verified with vLLM 0.33 on an RTX 5090 (scripts/vllm_check.py). Memory: two model
+copies on the GPU (HF + vLLM) plus vLLM's KV cache; run the lab with
+``--base-device cpu`` to keep the pristine copy off the GPU.
 """
 
 from __future__ import annotations
 
 import time
 
+import torch
+
 from . import forward as fw
+
+
+def pack(name: str, t: torch.Tensor) -> tuple:
+    """Tensor -> plain (name, dtype, shape, bytes). vLLM's engine-core RPC serializer turns
+    tensors nested in lists into Python lists, so tensors cross the process boundary as bytes."""
+    t = t.detach().to("cpu").contiguous()
+    return (name, str(t.dtype).removeprefix("torch."), list(t.shape), t.view(torch.uint8).numpy().tobytes())
+
+
+def checksum(t: torch.Tensor) -> tuple[float, float]:
+    f = t.float()
+    return (float(f.sum()), float(f.abs().sum()))
+
+
+def same(a, b, rtol: float = 1e-3) -> bool:
+    """Checksums of the same bf16 values on two devices agree up to reduction order."""
+    return abs(a[0] - b[0]) <= rtol * max(a[1], 1e-12) and abs(a[1] - b[1]) <= rtol * max(a[1], 1e-12)
+
+
+def unpack(item: tuple) -> tuple[str, torch.Tensor]:
+    name, dtype, shape, raw = item
+    return name, torch.frombuffer(bytearray(raw), dtype=getattr(torch, dtype)).reshape(shape)
 
 
 class WeightSyncExtension:
     """Mixed into vLLM's GPU worker (``worker_extension_cls``); called via collective_rpc."""
 
-    def wsp_load_weights(self, named_tensors):
-        # vLLM's load_weights takes Hugging Face checkpoint names and handles fused
-        # projections (q/k/v -> qkv_proj, gate/up -> gate_up_proj) itself.
-        self.model_runner.model.load_weights(weights=named_tensors)
-        return len(named_tensors)
+    def wsp_load_weights(self, packed):
+        """Load, then read back what vLLM now holds. vLLM's load_weights takes Hugging Face
+        checkpoint names and fuses q/k/v -> qkv_proj and gate/up -> gate_up_proj itself;
+        fused tensors have no same-named parameter, so only unfused ones are read back."""
+        model = self.model_runner.model
+        model.load_weights(weights=[unpack(x) for x in packed])
+        params = dict(model.named_parameters())
+        return {x[0]: checksum(params[x[0]].data) for x in packed if x[0] in params}
 
 
 class VLLMEngine:
@@ -45,17 +71,12 @@ class VLLMEngine:
         self._pushed: dict[str, tuple] = {}  # name -> checksum of the non-base copy vLLM holds
         self.syncs: list[dict] = []
 
-    @staticmethod
-    def _checksum(t) -> tuple:
-        f = t.float()
-        return (float(f.sum()), float(f.abs().sum()))
-
     def sync(self, ledger) -> int:
         """Push only what differs from vLLM's copy: new/changed edits, and reverts to base."""
         changed = set(ledger.changed())
         push = []
         for n in sorted(changed):
-            cs = self._checksum(ledger.params[n].data)
+            cs = checksum(ledger.params[n].data)
             if self._pushed.get(n) != cs:
                 push.append(n)
                 self._pushed[n] = cs
@@ -65,9 +86,14 @@ class VLLMEngine:
         if not push:
             return 0
         t0 = time.time()
-        payload = [(n, ledger.params[n].data.detach().to("cpu").contiguous()) for n in push]
-        self.llm.collective_rpc("wsp_load_weights", args=(payload,))
-        self.syncs.append({"tensors": len(push), "secs": round(time.time() - t0, 3)})
+        payload = [pack(n, ledger.params[n].data) for n in push]
+        held = self.llm.collective_rpc("wsp_load_weights", args=(payload,))[0]   # rank 0's read-back
+        bad = [n for n, cs in held.items() if not same(cs, checksum(ledger.params[n].data))]
+        rec = {"tensors": len(push), "verified": len(held) - len(bad), "secs": round(time.time() - t0, 3)}
+        self.syncs.append(rec)
+        if bad:
+            self._pushed.clear()        # unknown state: push everything changed next time
+            raise RuntimeError(f"vLLM weight sync mismatch after load: {bad[:5]}")
         return len(push)
 
     def generate(self, prompts: list[str], *, max_new_tokens: int, temperature: float = 0.0,

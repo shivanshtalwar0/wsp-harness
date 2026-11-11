@@ -34,7 +34,7 @@ class LabConfig:
     budget: int = 50
     max_generate: int = 512          # prompts per generate pass (paper: 512)
     max_read: int = 1024             # texts per read pass (paper: 1,024)
-    max_new_tokens: int = 2048       # cap for practice generations
+    max_new_tokens: int = 4096       # cap for generations; at 1024, 22% of Qwen3-4B MATH answers are cut off
     batch_size: int = 16
     practice: str = "math:train"     # MATH train: leak-free practice for a MATH-500 eval
     eval: str = "math500"
@@ -49,6 +49,7 @@ class LabConfig:
     attn: str = "auto"               # attention kernel: auto | sdpa | eager | flash_attention_2
     compile: bool = False            # static KV cache + torch.compile for generation (CUDA)
     gen_backend: str = "hf"          # hf | vllm (CUDA only, experimental)
+    vllm_gpu_mem: float = 0.5        # share of GPU memory vLLM may take (its weights + KV cache)
     extra: dict = field(default_factory=dict)
 
 
@@ -78,10 +79,13 @@ class Lab:
         if cfg.compile and not self.lm.device.startswith("cuda"):
             cfg.compile = False                 # torch.compile + static cache only pays off on CUDA
         self.engine = None
+        self._last_engine: dict = {"backend": "hf"}
         if cfg.gen_backend == "vllm":
             from .engines import VLLMEngine
 
-            self.engine = VLLMEngine(self.lm, cfg.model_id, cfg.dtype)
+            self.engine = VLLMEngine(self.lm, cfg.model_id, cfg.dtype,
+                                     gpu_memory_utilization=cfg.vllm_gpu_mem,
+                                     max_model_len=cfg.max_new_tokens + 2048)
         self.ledger = WeightLedger(self.lm, cfg.base_device, root=self.dir)
         if cfg.batch_size <= 0:                 # after the base copy, so free memory is real
             cfg.batch_size = self._auto_batch_size()
@@ -167,9 +171,11 @@ class Lab:
         """All generation goes through here: vLLM when configured (and no steering), else HF."""
         thinking = self.cfg.thinking if thinking is None else thinking
         if self.engine is not None and not steer:
-            self.engine.sync(self.ledger)
+            pushed = self.engine.sync(self.ledger)
+            self._last_engine = {"backend": "vllm", "synced": self.engine.syncs[-1] if pushed else None}
             return self.engine.generate(prompts, max_new_tokens=max_new_tokens, temperature=temperature,
                                         thinking=thinking, seed=seed)
+        self._last_engine = {"backend": "hf"}
         return fw.generate(self.lm, prompts, max_new_tokens=max_new_tokens, temperature=temperature,
                            thinking=thinking, batch_size=self.cfg.batch_size, seed=seed, steer=steer,
                            static_cache=self.cfg.compile)
@@ -292,6 +298,7 @@ class Lab:
                 "hit_limit_rate": round(sum(r["hit_limit"] for r in rows) / len(rows), 4),
                 "mean_tokens": round(sum(r["n_tokens"] for r in rows) / len(rows), 1),
                 "loop_rate": round(sum(r["hit_limit"] and r["repetition"] > 0.5 for r in rows) / len(rows), 4),
+                "engine": self._last_engine,
                 "note": "full rows are in the sandbox as last_gen",
             }
             out_rows = []

@@ -92,7 +92,7 @@ misgraded, so read the `eval-*.json` rows before trusting small differences.
 
 The pass definitions follow the paper (one pass = up to 512 generations or 1,024 reads). Long
 thinking-mode generations on a laptop are slow; `--max-new-tokens` caps practice generations
-(default 2,048) and `--thinking` turns on Qwen3's thinking mode.
+(default 4,096; at 1,024, about a quarter of MATH answers are cut off) and `--thinking` turns on Qwen3's thinking mode.
 
 ## The controls are built in
 
@@ -146,14 +146,19 @@ reuse their cached result.
 
 ## Speed options
 
-See the table in the README. In short: length-sorted batching everywhere; on CUDA, an automatic
-batch size of 64, TF32, FlashAttention-2 when installed, optional `--compile` (static cache +
-`torch.compile`), and the experimental `--gen-backend vllm`. With vLLM, all generation
+See the table in the README. In short: length-sorted batching everywhere; on CUDA, a batch size picked from
+free GPU memory and the KV cache a full-length answer needs, TF32, FlashAttention-2 when installed, optional `--compile` (static cache +
+`torch.compile`), and `--gen-backend vllm` (verified on an RTX 5090, vLLM 0.33). With vLLM, all generation
 (practice passes, validation generation, operator eval) goes through `Lab._gen`, which first
 calls `VLLMEngine.sync`. That pushes, via `collective_rpc` into a vLLM worker extension calling
 `model.load_weights`, only the tensors whose checksum changed since the last push, and pushes
-base values back for tensors that were restored. Steering calls use the HF path, because they
-need forward hooks.
+base values back for tensors that were restored. Tensors cross vLLM's RPC boundary as raw bytes
+plus dtype and shape (its serializer turns nested tensors into lists). After loading, the worker
+returns checksums of its own parameters for every pushed name that is not fused (q/k/v and
+gate/up are fused inside vLLM), and the sync fails loudly on any mismatch. Each
+`forward_generate` result reports `engine` (`hf`, or `vllm` with the sync record). Steering
+calls use the HF path, because they need forward hooks. `scripts/vllm_check.py` checks the whole
+loop on a running lab.
 
 ## Demo round and the Pages site
 
