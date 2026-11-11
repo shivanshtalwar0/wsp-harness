@@ -29,7 +29,9 @@ def main() -> None:
     ap.add_argument("--layers", default="15,19")
     ap.add_argument("--cols", type=int, default=64)
     a = ap.parse_args()
-    c = httpx.Client(base_url=a.url, timeout=None)
+    import os
+    tok = os.environ.get("WSP_LAB_TOKEN", "")
+    c = httpx.Client(base_url=a.url, timeout=None, headers={"X-WSP-Token": tok} if tok else {})
 
     def call(tool, **body):
         r = c.post(f"/api/{tool}", json=body).json()

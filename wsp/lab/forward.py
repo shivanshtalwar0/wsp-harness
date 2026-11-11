@@ -248,6 +248,24 @@ def generate(
     return results  # type: ignore[return-value]
 
 
+MAX_BATCH_TOKENS = 32768   # teacher-forced passes: cap padded tokens per batch, not just sequences
+
+
+def _token_batches(order: list[int], lens: list[int], max_items: int, max_tokens: int = None):
+    """Split indices (sorted longest first) so each batch has <= max_items sequences and
+    <= max_tokens padded tokens. Long reference solutions otherwise blow up memory."""
+    max_tokens = max_tokens or MAX_BATCH_TOKENS
+    batch: list[int] = []
+    for j in order:
+        width = max([lens[k] for k in batch] + [lens[j]])
+        if batch and (len(batch) + 1 > max_items or (len(batch) + 1) * width > max_tokens):
+            yield batch
+            batch = []
+        batch.append(j)
+    if batch:
+        yield batch
+
+
 def _by_length(tok, texts: list[str]) -> list[int]:
     """Indices of texts, longest first (stable). Callers restore the original order."""
     lens = [len(x) for x in tok(texts, add_special_tokens=False)["input_ids"]]
@@ -297,10 +315,10 @@ def answer_nll(
     heads = [render_prompt(lm, p, thinking) for p in prompts]
     full = [h + a for h, a in zip(heads, answers)]
     head_len = [len(x) for x in tok(heads, add_special_tokens=False)["input_ids"]]
-    order = _by_length(tok, full)
+    full_len = [min(len(x), max_length) for x in tok(full, add_special_tokens=False)["input_ids"]]
+    order = sorted(range(len(full)), key=lambda i: -full_len[i])
     out: list[float] = [float("nan")] * len(full)
-    for i in range(0, len(full), batch_size):
-        idx = order[i : i + batch_size]
+    for idx in _token_batches(order, full_len, batch_size):
         enc = tok([full[j] for j in idx], return_tensors="pt", padding=True, truncation=True,
                   max_length=max_length, add_special_tokens=False).to(lm.device)
         h = _hidden(lm, enc)
@@ -334,12 +352,12 @@ def read(
     tok = lm.tok
     tok.padding_side = "right"
     captures = parse_captures(capture or [], lm)
-    order = _by_length(tok, texts)            # batch similar lengths; results keep input order
+    lens = [min(len(x), max_length) for x in tok(texts)["input_ids"]]
+    order = sorted(range(len(texts)), key=lambda i: -lens[i])   # similar lengths batch together
     rows: dict[str, list] = {}                # key -> per-text values, input order
     per_text: list[dict | None] = [None] * len(texts)
 
-    for i in range(0, len(texts), batch_size):
-        idx = order[i : i + batch_size]
+    for idx in _token_batches(order, lens, batch_size):
         chunk = [texts[j] for j in idx]
         enc = tok(chunk, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(lm.device)
         mask = enc["attention_mask"]

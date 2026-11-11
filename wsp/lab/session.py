@@ -52,6 +52,18 @@ class LabConfig:
     extra: dict = field(default_factory=dict)
 
 
+def kv_bytes_per_token(tc, dtype_bytes: int = 2) -> int:
+    heads = getattr(tc, "num_key_value_heads", None) or tc.num_attention_heads
+    head_dim = getattr(tc, "head_dim", None) or tc.hidden_size // tc.num_attention_heads
+    return 2 * tc.num_hidden_layers * heads * head_dim * dtype_bytes
+
+
+def auto_batch_size(free_bytes: int, tc, max_new_tokens: int, dtype_bytes: int = 2,
+                    prompt_tokens: int = 768, frac: float = 0.6, cap: int = 64) -> int:
+    per_seq = kv_bytes_per_token(tc, dtype_bytes) * (max_new_tokens + prompt_tokens)
+    return int(max(1, min(cap, (free_bytes * frac) // per_seq)))
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -63,8 +75,6 @@ class Lab:
         self.dir = Path(cfg.run_dir) / self.session
         self.dir.mkdir(parents=True, exist_ok=True)
         self.lm = lm or load(cfg.model_id, cfg.device, cfg.dtype, cfg.attn)
-        if cfg.batch_size <= 0:
-            cfg.batch_size = 64 if self.lm.device.startswith("cuda") else 16
         if cfg.compile and not self.lm.device.startswith("cuda"):
             cfg.compile = False                 # torch.compile + static cache only pays off on CUDA
         self.engine = None
@@ -73,6 +83,8 @@ class Lab:
 
             self.engine = VLLMEngine(self.lm, cfg.model_id, cfg.dtype)
         self.ledger = WeightLedger(self.lm, cfg.base_device, root=self.dir)
+        if cfg.batch_size <= 0:                 # after the base copy, so free memory is real
+            cfg.batch_size = self._auto_batch_size()
         self.budget = fw.Budget(cfg.budget)
         self.summary = self.lm.summary()
         self.sandbox = Sandbox(self.lm, self.summary)
@@ -100,6 +112,15 @@ class Lab:
             rec = self.validator.set_base()
             self._log("validate", {"wver": 0, "items": rec["n"]}, rec, t0)
             threading.Thread(target=self._val_worker, daemon=True, name="wsp-validate").start()
+
+    def _auto_batch_size(self) -> int:
+        """CUDA: as many sequences as the KV cache for a full-length generation fits in ~60% of
+        free memory (Qwen3-4B: 147 KB per token). Elsewhere: 16."""
+        if not self.lm.device.startswith("cuda"):
+            return 16
+        free, _ = torch.cuda.mem_get_info(torch.device(self.lm.device))
+        return auto_batch_size(free, self.lm.text_config(), self.cfg.max_new_tokens,
+                               torch.finfo(self.lm.dtype).bits // 8)
 
     # ----------------------------------------------------------- weight state
     @torch.no_grad()

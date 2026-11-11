@@ -11,15 +11,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import secrets
 import sys
 
-DEFAULT_URL = "http://127.0.0.1:8765"
+DEFAULT_URL = os.environ.get("WSP_LAB_URL", "http://127.0.0.1:8765")
 
 
 def _admin(url: str, tool: str, body: dict) -> int:
     import httpx
 
-    r = httpx.post(f"{url.rstrip('/')}/admin/{tool}", json=body, timeout=None)
+    tok = os.environ.get("WSP_LAB_TOKEN", "")
+    r = httpx.post(f"{url.rstrip('/')}/admin/{tool}", json=body, timeout=None,
+                   headers={"X-WSP-Token": tok} if tok else {})
     print(json.dumps(r.json(), indent=2))
     return 0 if r.status_code < 400 else 1
 
@@ -51,7 +55,9 @@ def main(argv=None) -> int:
     s.add_argument("--compile", action="store_true", help="static KV cache + torch.compile (CUDA)")
     s.add_argument("--gen-backend", default="hf", choices=["hf", "vllm"],
                    help="vllm: CUDA-only fast generation with live weight sync (experimental)")
-    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--host", default="127.0.0.1", help="0.0.0.0 or a LAN IP to serve other machines")
+    s.add_argument("--token", default=os.environ.get("WSP_LAB_TOKEN"),
+                   help="required by every request; auto-generated when --host is not loopback")
     s.add_argument("--port", type=int, default=8765)
 
     v = sub.add_parser("validation", help="per-edit validation history (operator)")
@@ -93,10 +99,17 @@ def main(argv=None) -> int:
             val_gen_n=a.val_gen_n, val_visible=a.val_visible, attn=a.attn, compile=a.compile,
             gen_backend=a.gen_backend,
         )
+        token = a.token
+        if not token and a.host not in ("127.0.0.1", "localhost", "::1"):
+            token = secrets.token_urlsafe(24)     # /api/python runs code: never serve a LAN open
         print(f"loading {cfg.model_id} ...", file=sys.stderr)
         lab = Lab(cfg)
-        print(f"session {lab.session} -> {lab.dir}\nviewer  http://{a.host}:{a.port}/", file=sys.stderr)
-        uvicorn.run(create_app(lab), host=a.host, port=a.port, log_level="warning")
+        shown = "<this-machine>" if a.host == "0.0.0.0" else a.host
+        q = f"?token={token}" if token else ""
+        print(f"session {lab.session} -> {lab.dir}\nviewer  http://{shown}:{a.port}/{q}", file=sys.stderr)
+        if token:
+            print(f"token   {token}   (clients: export WSP_LAB_TOKEN=...)", file=sys.stderr)
+        uvicorn.run(create_app(lab, token), host=a.host, port=a.port, log_level="warning")
         return 0
     if a.cmd == "eval":
         return _admin(a.url, "evaluate", {"n": a.n, "seed": a.seed, "checkpoint": a.checkpoint,

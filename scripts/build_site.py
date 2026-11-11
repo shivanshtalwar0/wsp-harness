@@ -28,7 +28,9 @@ def main() -> None:
     ap.add_argument("--top-active", type=int, default=6, help="most active neurons per layer to include")
     ap.add_argument("--top-norm", type=int, default=3, help="largest-norm neurons per layer to include")
     a = ap.parse_args()
-    c = httpx.Client(base_url=a.url, timeout=None)
+    import os
+    tok = os.environ.get("WSP_LAB_TOKEN", "")
+    c = httpx.Client(base_url=a.url, timeout=None, headers={"X-WSP-Token": tok} if tok else {})
 
     demo = Path(a.out) / "demo"
     data = demo / "data"

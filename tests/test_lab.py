@@ -486,3 +486,46 @@ def test_chunked_scoring_matches_full_logits(lab):
         fw.LOGIT_CHUNK = old
     for r, want in zip(per_text, ref.tolist()):
         assert r["nll"] == pytest.approx(want, abs=2e-4)
+
+
+def test_token_guards_every_route(lab):
+    from fastapi.testclient import TestClient
+
+    from wsp.lab.server import create_app
+
+    c = TestClient(create_app(lab, token="s3cret"))
+    assert c.post("/api/python", json={"code": "1"}).status_code == 401
+    assert c.get("/viz/state").status_code == 401
+    assert c.get("/").status_code == 401
+    assert c.post("/api/python", json={"code": "1+1"}, headers={"X-WSP-Token": "s3cret"}).json()["output"] == "2"
+    assert c.post("/api/python", json={"code": "1"}, headers={"X-WSP-Token": "wrong"}).status_code == 401
+    # the viewer: open once with ?token=, then the cookie carries it (page, assets, stream)
+    assert c.get("/?token=s3cret").status_code == 200
+    assert c.get("/viz/state").status_code == 200
+    assert c.get("/static/app.js").status_code == 200
+
+
+def test_token_batches_respect_both_limits():
+    from wsp.lab.forward import _token_batches
+
+    lens = [1000, 900, 300, 300, 300, 50, 50, 50, 50, 50]
+    order = sorted(range(len(lens)), key=lambda i: -lens[i])
+    batches = list(_token_batches(order, lens, max_items=4, max_tokens=1200))
+    assert sorted(j for b in batches for j in b) == list(range(len(lens)))
+    for b in batches:
+        assert len(b) <= 4 and len(b) * max(lens[j] for j in b) <= 1200 or len(b) == 1
+
+
+def test_auto_batch_size_for_qwen3_4b_on_a_5090():
+    from types import SimpleNamespace
+
+    from wsp.lab.session import auto_batch_size, kv_bytes_per_token
+
+    tc = SimpleNamespace(num_hidden_layers=36, num_key_value_heads=8, num_attention_heads=32,
+                         head_dim=128, hidden_size=2560)
+    assert kv_bytes_per_token(tc) == 147456                      # 144 KiB per token in bf16
+    gib = 1024**3
+    b4k = auto_batch_size(19 * gib, tc, 4096)                    # ~19 GiB free after model + others
+    b1k = auto_batch_size(19 * gib, tc, 1024)
+    assert 10 <= b4k <= 20 and b1k > b4k and b1k <= 64
+    assert auto_batch_size(1 * gib, tc, 4096) >= 1

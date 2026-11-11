@@ -17,6 +17,8 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 
 URL = os.environ.get("WSP_LAB_URL", "http://127.0.0.1:8765").rstrip("/")
+TOKEN = os.environ.get("WSP_LAB_TOKEN", "")
+HEADERS = {"X-WSP-Token": TOKEN} if TOKEN else {}
 TIMEOUT = float(os.environ.get("WSP_LAB_TIMEOUT", "3600"))
 MAX_CHARS = int(os.environ.get("WSP_LAB_MAX_CHARS", "60000"))
 
@@ -33,7 +35,7 @@ mcp = MCPServer("wsp-lab", instructions=INSTRUCTIONS)
 
 def _post(tool: str, body: dict) -> str:
     try:
-        r = httpx.post(f"{URL}/api/{tool}", json=body, timeout=TIMEOUT)
+        r = httpx.post(f"{URL}/api/{tool}", json=body, timeout=TIMEOUT, headers=HEADERS)
     except httpx.HTTPError as e:
         return json.dumps({"error": f"lab unreachable at {URL}: {e}. Start it with `python -m wsp.lab serve`."})
     if r.status_code >= 400:

@@ -11,6 +11,7 @@ from typing import Any
 
 import asyncio
 import json
+import secrets
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -40,8 +41,23 @@ ADMIN_TOOLS = {"evaluate": "evaluate", "export": "export", "set_budget": "set_bu
                "validation": "validation"}
 
 
-def create_app(lab: Lab) -> FastAPI:
+def create_app(lab: Lab, token: str | None = None) -> FastAPI:
+    """``token``: required on every request when set (header X-WSP-Token, ``?token=``, or the
+    cookie the viewer gets from opening ``/?token=...``). Always set it when the lab listens on
+    anything but localhost: /api/python runs arbitrary code."""
     app = FastAPI(title="wsp lab", version="0.1")
+
+    if token:
+        @app.middleware("http")
+        async def require_token(request: Request, call_next):
+            supplied = (request.headers.get("x-wsp-token") or request.query_params.get("token")
+                        or request.cookies.get("wsp_token") or "")
+            if not secrets.compare_digest(supplied, token):
+                return JSONResponse({"error": "missing or wrong lab token"}, status_code=401)
+            resp = await call_next(request)
+            if request.query_params.get("token"):
+                resp.set_cookie("wsp_token", token, httponly=True, samesite="strict")
+            return resp
 
     def dispatch(table: dict, tool: str, body: dict) -> Any:
         if tool not in table:
