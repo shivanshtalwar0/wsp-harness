@@ -131,7 +131,36 @@ python -m wsp.lab eval --n 500 --checkpoint final
 python -m wsp.lab export --full-model</pre>
   <p>No download handy? <code>--model tiny-qwen3 --device cpu --dtype float32 --practice toy --eval toy</code> runs a 4-layer random model offline.</p>
 
-  <h2><span class="n">05</span>The replay's session</h2>
+  <h2><span class="n">05</span>Results on an RTX 5090</h2>
+  <p>
+    <strong>Set the token cap before editing anything.</strong> Qwen3-4B, non-thinking, greedy, bf16. At a
+    1,024-token cap, about a fifth of the "wrong" answers were simply cut off:
+  </p>
+  <table class="results">
+    <tr><th>set</th><th>cap 1,024</th><th>cap 4,096</th><th>cut off</th></tr>
+    <tr><td>MATH-500, first 200 (held-out test)</td><td>67.5% [61–74]</td><td>82.0% [76–87]</td><td>26% → 3.5%</td></tr>
+    <tr><td>MATH train, 64 items (Opus practice set)</td><td>76.6% [65–85]</td><td>90.6% [81–96]</td><td>21.9% → 1.6%</td></tr>
+  </table>
+  <p>
+    On MATH-500 the larger cap rescued 30 problems and lost 1 (paired sign test p ≈ 3×10⁻⁸), so 4,096 is
+    now the default. That gain is a setting, not an edit. The first Opus run, at 1,024 tokens, spent 7 of
+    25 passes ($3.67): concision steering cut truncation but lowered accuracy, markdown suppression did
+    nothing, and it recommended the unmodified base. <strong>No weight edit has beaten the base model yet.</strong>
+  </p>
+  <table class="results">
+    <tr><th>generation backend (same 64 problems)</th><th>cap 1,024</th><th>cap 4,096</th><th>accuracy at 4,096</th></tr>
+    <tr><td>Hugging Face (auto batch 17)</td><td>118 s</td><td>463 s</td><td>90.6%</td></tr>
+    <tr><td>vLLM 0.33 (live weight sync)</td><td>23.5 s</td><td>45.6 s</td><td>89.1%</td></tr>
+  </table>
+  <p>
+    With <code>--gen-backend vllm</code>, edits made on the Hugging Face model are pushed to vLLM before
+    every generation, and the vLLM worker reads its own weights back so the lab can verify the push; it
+    refuses to generate on a mismatch. Verified end to end on the 5090: an edit changes vLLM's output, and a
+    restore matches the base checksums again. Per-edit validation takes about 3 s on the 5090 vs 27 s on
+    an M5 Pro.
+  </p>
+
+  <h2><span class="n">06</span>The replay's session</h2>
   <p>
     The <a href="demo/">3D replay</a> is a snapshot of a <strong>scripted</strong> round
     (<code>scripts/demo_session.py</code>), not an analyst run. A fixed recipe exercised every part of the
@@ -152,7 +181,7 @@ python -m wsp.lab export --full-model</pre>
     hypothesis, at a sample size where the intervals can separate.
   </p>
 
-  <h2><span class="n">06</span>What it can and can't do</h2>
+  <h2><span class="n">07</span>What it can and can't do</h2>
   <div class="warn">
     <p><strong>This is not distillation.</strong> Claude's knowledge doesn't flow into Qwen's weights; only the
     edits it reasons its way to do. The paper's own control found that weight edits remove obstacles hiding
