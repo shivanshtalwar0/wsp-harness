@@ -1,0 +1,358 @@
+{
+ "model": "Qwen/Qwen3.5-0.8B",
+ "engine": "vLLM 0.33 on RTX 5090 (live weight sync)",
+ "date": "2026-11-11",
+ "method": "closed-form down_proj writes, no gradients (wsp/lab/factedit.py)",
+ "runs": [
+  {
+   "tag": "dev-a",
+   "facts": 12,
+   "layers": "4-8",
+   "target_layer": 8,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": {
+    "edit": 0.1111,
+    "test": 0.0833,
+    "general": 0.9167,
+    "in_context": 0.9167
+   },
+   "edited": {
+    "edit": 0.0556,
+    "test": 0.0833,
+    "general": 0.95
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.0458
+  },
+  {
+   "tag": "dev-b",
+   "facts": 12,
+   "layers": "4-8",
+   "target_layer": 8,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": {
+    "edit": 0.1111,
+    "test": 0.0833,
+    "general": 0.9167,
+    "in_context": 0.9167
+   },
+   "edited": {
+    "edit": 0.0278,
+    "test": 0.125,
+    "general": 0.9833
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.0385
+  },
+  {
+   "tag": "dev-c",
+   "facts": 12,
+   "layers": "8-20",
+   "target_layer": 22,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.8889,
+    "test": 0.75,
+    "general": 0.9167
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.046
+  },
+  {
+   "tag": "dev-d",
+   "facts": 12,
+   "layers": "8-20",
+   "target_layer": 22,
+   "lam": 100.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.8889,
+    "test": 0.75,
+    "general": 0.8667
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.0409
+  },
+  {
+   "tag": "dev-e",
+   "facts": 12,
+   "layers": "8-20",
+   "target_layer": 22,
+   "lam": 10000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.8333,
+    "test": 0.7083,
+    "general": 0.9333
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.0891
+  },
+  {
+   "tag": "dev-f",
+   "facts": 12,
+   "layers": "4-21",
+   "target_layer": 23,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.7222,
+    "test": 0.5,
+    "general": 0.55
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.4172
+  },
+  {
+   "tag": "dev-g",
+   "facts": 12,
+   "layers": "12-21",
+   "target_layer": 22,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.8889,
+    "test": 0.75,
+    "general": 0.95
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.035
+  },
+  {
+   "tag": "dev-h",
+   "facts": 12,
+   "layers": "8-22",
+   "target_layer": 23,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.75,
+    "test": 0.6667,
+    "general": 0.6833
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": 0.3457
+  },
+  {
+   "tag": "dev-logit",
+   "facts": 12,
+   "layers": "12-23",
+   "target_layer": 23,
+   "lam": 1000.0,
+   "target_kind": "logit",
+   "focus": "answer",
+   "batch": 0,
+   "base": {
+    "edit": 0.1111,
+    "test": 0.0833,
+    "general": 0.9167,
+    "in_context": 0.9167
+   },
+   "edited": {
+    "edit": 0.6389,
+    "test": 0.625,
+    "general": 0.9333
+   },
+   "n": {
+    "edit": 36,
+    "test": 24,
+    "general": 60
+   },
+   "final_gap": null
+  },
+  {
+   "tag": "full-a",
+   "facts": 310,
+   "layers": "12-21",
+   "target_layer": 22,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": {
+    "edit": 0.0806,
+    "test": 0.0565,
+    "general": 0.9167,
+    "in_context": 0.7823
+   },
+   "edited": {
+    "edit": 0.2667,
+    "test": 0.1919,
+    "general": 0.6
+   },
+   "n": {
+    "edit": 930,
+    "test": 620,
+    "general": 60
+   },
+   "final_gap": 0.207
+  },
+  {
+   "tag": "full-b",
+   "facts": 310,
+   "layers": "6-21",
+   "target_layer": 22,
+   "lam": 10000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.2699,
+    "test": 0.1774,
+    "general": 0.8667
+   },
+   "n": {
+    "edit": 930,
+    "test": 620,
+    "general": 60
+   },
+   "final_gap": 0.2054
+  },
+  {
+   "tag": "full-c",
+   "facts": 310,
+   "layers": "6-21",
+   "target_layer": 22,
+   "lam": 3000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.3022,
+    "test": 0.1806,
+    "general": 0.7167
+   },
+   "n": {
+    "edit": 930,
+    "test": 620,
+    "general": 60
+   },
+   "final_gap": 0.1959
+  },
+  {
+   "tag": "full-d",
+   "facts": 310,
+   "layers": "6-21",
+   "target_layer": 22,
+   "lam": 10000.0,
+   "target_kind": "ctx",
+   "focus": "answer",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.3161,
+    "test": 0.221,
+    "general": 0.7667
+   },
+   "n": {
+    "edit": 930,
+    "test": 620,
+    "general": 60
+   },
+   "final_gap": 0.1629
+  },
+  {
+   "tag": "full-e",
+   "facts": 310,
+   "layers": "12-21",
+   "target_layer": 22,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "answer",
+   "batch": 0,
+   "base": null,
+   "edited": {
+    "edit": 0.3505,
+    "test": 0.2097,
+    "general": 0.5333
+   },
+   "n": {
+    "edit": 930,
+    "test": 620,
+    "general": 60
+   },
+   "final_gap": 0.0971
+  },
+  {
+   "tag": "full-f",
+   "facts": 310,
+   "layers": "12-21",
+   "target_layer": 22,
+   "lam": 1000.0,
+   "target_kind": "ctx",
+   "focus": "all",
+   "batch": 24,
+   "base": null,
+   "edited": {
+    "edit": 0.0,
+    "test": 0.0,
+    "general": 0.0167
+   },
+   "n": {
+    "edit": 930,
+    "test": 620,
+    "general": 60
+   },
+   "final_gap": null
+  }
+ ]
+}

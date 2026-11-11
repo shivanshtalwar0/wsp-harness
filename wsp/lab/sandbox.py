@@ -60,7 +60,20 @@ def _helpers(lm: LoadedModel) -> dict:
         ids = token_ids(text)
         return lm.unembed()[ids].float().mean(0).cpu()
 
+    from . import factedit
+
     return {
+        "load_facts": factedit.load_facts,
+        "fact_texts": factedit.fact_texts,
+        "gather": factedit.gather,
+        "second_moment": factedit.second_moment,
+        "closed_form": factedit.closed_form,
+        "layer_update": factedit.layer_update,
+        "residual_gap": factedit.residual_gap,
+        "next_tokens": factedit.next_tokens,
+        "logit_targets": factedit.logit_targets,
+        "logit_layer_update": factedit.logit_layer_update,
+        "unembed": lambda: lm.unembed().detach(),
         "to_np": to_np,
         "cos": cos,
         "logit_lens": logit_lens,
@@ -81,6 +94,9 @@ Namespace:
   np, torch
   helpers      cos(a,b), logit_lens(vec,k), logit_lens_neg(vec,k), top_singular(M,k),
                token_ids(text), token_vec(text), to_np(t)
+  fact editing load_facts, fact_texts, gather, second_moment, closed_form, layer_update,
+               residual_gap (gradient-free fact insertion; see wsp/lab/factedit.py)
+  forward_read(texts="$name") reads a list of strings stored in the sandbox.
 State persists across calls. Print what you want to see; output is truncated at 20k chars.
 Store vectors you want to use in apply_patch / steering as variables and pass "$name".
 """

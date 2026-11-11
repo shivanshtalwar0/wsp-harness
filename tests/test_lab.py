@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import numpy as np
 import pytest
@@ -555,3 +556,116 @@ def test_auto_batch_size_for_qwen3_4b_on_a_5090():
     b1k = auto_batch_size(19 * gib, tc, 1024)
     assert 10 <= b4k <= 20 and b1k > b4k and b1k <= 64
     assert auto_batch_size(1 * gib, tc, 4096) >= 1
+
+
+# ------------------------------------------------------------------ facts + gradient-free fact editing
+
+FACT = {"id": "f1", "fact": "The Starter pack costs 500 rupees.", "answer": "500 rupees",
+        "aliases": ["Rs 500", "INR 500"], "edit_questions": ["What does Starter cost?", "Starter price?"],
+        "test_questions": ["How much is the Starter pack?"]}
+
+
+def test_contains_answer_is_word_bounded():
+    from wsp.lab.data import contains_answer
+
+    assert contains_answer("It costs **7 credits** per song.", ["7 credits"])
+    assert not contains_answer("It costs 17 credits.", ["7 credits"])
+    assert contains_answer("You get 1,000 credits", ["1000 credits"])
+    assert contains_answer("Price: Rs 500 only", ["500 rupees", "Rs 500"])
+    assert not contains_answer("version 2.5", ["5"])
+
+
+def test_facts_source_expands_questions_and_grades_by_containment(tmp_path):
+    from wsp.lab.data import load_source
+
+    path = tmp_path / "facts.jsonl"
+    path.write_text(json.dumps(FACT) + "\n")
+    edit, test = load_source(f"facts:{path}"), load_source(f"facts:{path}:test")
+    assert [p.id for p in edit] == ["f1-e0", "f1-e1"] and [p.id for p in test] == ["f1-t0"]
+    p = test[0]
+    assert p.prompt == "How much is the Starter pack?"           # no \boxed instruction
+    assert p.check("It is INR 500.") and not p.check("It is 5000 rupees.")
+    assert p.solution == FACT["fact"]
+
+
+def test_name_map_prefers_language_model_over_mtp():
+    from wsp.lab.engines import name_map
+
+    ck = ["model.language_model.layers.0.mlp.down_proj.weight", "mtp.layers.0.mlp.down_proj.weight",
+          "model.language_model.embed_tokens.weight", "model.visual.blocks.0.mlp.down_proj.weight"]
+    m = name_map(["model.layers.0.mlp.down_proj.weight", "model.embed_tokens.weight", "lm_head.weight"], ck)
+    assert m["model.layers.0.mlp.down_proj.weight"] == "model.language_model.layers.0.mlp.down_proj.weight"
+    assert m["model.embed_tokens.weight"] == "model.language_model.embed_tokens.weight"
+    assert m["lm_head.weight"] == "lm_head.weight"            # unknown: passed through
+
+
+def test_closed_form_hits_targets_when_unregularized():
+    from wsp.lab.factedit import closed_form
+
+    g = torch.Generator().manual_seed(0)
+    K, R = torch.randn(5, 16, generator=g), torch.randn(5, 8, generator=g)
+    dW = closed_form(K, R, torch.eye(16), lam=1e-6, device="cpu")
+    assert dW.shape == (8, 16) and torch.allclose(K @ dW.T, R, atol=1e-3)
+
+
+def test_fact_texts_align_response_positions(lab):
+    from wsp.lab.factedit import fact_texts
+
+    tok = lab.lm.tok
+    bare, ctx, pb, pc = fact_texts(tok, [FACT])
+    assert len(bare) == len(ctx) == 2 and ctx[0].count(FACT["fact"]) == 2   # stated, then answered
+    for b, c, i, j in zip(bare, ctx, pb, pc):
+        bi, ci = tok(b)["input_ids"], tok(c)["input_ids"]
+        assert [bi[k + 1] for k in i] == [ci[k + 1] for k in j]            # same predicted tokens
+
+
+def test_fact_edit_pipeline_closes_the_gap_through_the_lab(lab):
+    """End to end on the tiny model: metered reads by "$name", closed-form writes in the sandbox."""
+    lab.python(f"F = {json.dumps([FACT])}\n"
+               "bare, ctx, pb, pc = fact_texts(tok, F)\n"
+               "generic = [p.question for p in __import__('wsp.lab.data', fromlist=['x']).load_source('toy')]")
+    assert "error" not in lab.forward_read(texts="$ctx", capture=["resid:2"], positions="all")
+    lab.python("target = gather(acts['resid:2'], pc)")
+    lab.forward_read(texts="$generic", capture=["mlp_act:1-2"], positions="all")
+    lab.python("C = {l: second_moment(acts[f'mlp_act:{l}']) for l in (1, 2)}")
+    gaps = []
+    for i, layer in enumerate((1, 2)):
+        lab.forward_read(texts="$bare", capture=["resid:2", f"mlp_act:{layer}"], positions="all")
+        out = lab.python(f"g = residual_gap(acts, 2, target, pb)\n"
+                         f"W.layer({layer}, 'mlp.down_proj.weight')[:] += "
+                         f"layer_update(acts, {layer}, 2, target, pb, C[{layer}], {2 - i}, 1e-3)\nprint(g)")
+        gaps.append(float(out["output"].strip()))
+    lab.forward_read(texts="$bare", capture=["resid:2"], positions="all")
+    final = float(lab.python("print(residual_gap(acts, 2, target, pb))")["output"].strip())
+    assert final < 0.5 * gaps[0]
+    assert lab.fingerprint()                                  # the ledger saw the writes
+    assert "error" in lab.forward_read(texts="$nope")
+
+
+def test_fact_texts_answer_focus_keeps_first_and_answer_positions(lab):
+    from wsp.lab.factedit import fact_texts
+
+    tok = lab.lm.tok
+    _, _, all_pos, _ = fact_texts(tok, [FACT])
+    bare, _, pos, _ = fact_texts(tok, [FACT], focus="answer")
+    assert pos[0][0] == all_pos[0][0] and len(pos[0]) < len(all_pos[0])
+    ids = tok(bare[0])["input_ids"]
+    predicted = tok.decode([ids[k + 1] for k in pos[0][1:]])
+    assert "500" in predicted.replace(" ", "")
+
+
+def test_logit_targets_make_the_next_token_win():
+    from wsp.lab.factedit import logit_targets
+
+    g = torch.Generator().manual_seed(1)
+    U = torch.randn(50, 16, generator=g)
+    h = torch.randn(8, 16, generator=g)
+    rms = h.pow(2).mean(-1, keepdim=True).sqrt()
+    y = torch.randint(0, 50, (8,), generator=g)
+    for _ in range(4):                                    # first-order steps converge quickly
+        hp = h / h.pow(2).mean(-1, keepdim=True).sqrt()
+        d, stats = logit_targets(h, hp, y, U, margin=2.0, max_step=10.0, device="cpu")
+        h = h + d
+    z = (h / h.pow(2).mean(-1, keepdim=True).sqrt()) @ U.T
+    assert (z.argmax(-1) == y).float().mean() >= 0.75
+    assert rms.shape == (8, 1)

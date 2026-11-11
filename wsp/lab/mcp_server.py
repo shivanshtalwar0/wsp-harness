@@ -101,7 +101,7 @@ def forward_generate(
 
 @mcp.tool(structured_output=False)
 def forward_read(
-    texts: list[str],
+    texts: list[str] | str,
     capture: list[str] | None = None,
     positions: str = "last",
     top_k: int = 5,

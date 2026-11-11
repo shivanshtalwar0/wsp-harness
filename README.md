@@ -183,7 +183,11 @@ shell, file or web access. The tools: `lab_info`, `python` (sandbox: `W`, `acts`
   accuracy (70.3% → 64.1%); suppressing markdown tokens did nothing measurable. It recommended
   the unmodified base. Audit: practice data only, no held-out access. Its premise, that
   truncated answers were the hard ones, did not hold: raising the cap rescued most of them (above).
-- **No weight edit has beaten the base model yet.** The one large gain so far is a setting.
+- **No weight edit has beaten the base model on MATH yet.** The one large gain so far is a setting.
+- **Fact editing on Qwen3.5-0.8B** (voxmin.com facts, closed-form writes, no gradients, vLLM on
+  the RTX 5090): on 12 facts, held-out accuracy rose from 8% to 75% with general knowledge
+  unchanged (92% → 95%). On all 310 facts the best was 6% → 22%, and general knowledge fell. Details:
+  [`docs/07-fact-editing.md`](docs/07-fact-editing.md).
 
 ## Limits, stated plainly
 
@@ -208,6 +212,7 @@ wsp/lab/            the live lab
   validate.py       per-edit paired validation (answer loss, optional generation, sign test)
   engines.py        optional vLLM generation backend with live weight sync (CUDA, experimental)
   edits.py          base copy, diff, checkpoints, Patch-IR ops in torch, random control
+  factedit.py       closed-form fact insertion (MEMIT-style down_proj writes, logit targets)
   sandbox.py        the analyst's Python namespace over live weights
   data.py           practice / validation / test splits (MATH, MATH-500, GSM8K, jsonl) and grading
   model.py          loading, device and attention selection, tiny offline model
@@ -215,7 +220,7 @@ wsp/lab/            the live lab
   mcp_server.py     MCP proxy exposing analyst tools only
   viewer/           three.js weight-space view
 prompts/analyst.md  system prompt for the Opus / Fable analyst
-scripts/            run_analyst.sh, demo_session.py, build_site.py, show_stream.py
+scripts/            run_analyst.sh, demo_session.py, build_site.py, show_stream.py, fact_edit.py
 site/               GitHub Pages: landing page, screenshots, static replay
 tests/test_lab.py   lab tests on an offline tiny Qwen3
 wsp/{patch,quant,weights,verify,probes,analyst,cli}.py, evals/   earlier 4-bit 27B tooling

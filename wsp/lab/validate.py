@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 
 from . import forward as fw
-from .data import ProblemSet, is_correct
+from .data import ProblemSet
 
 
 @dataclass
@@ -82,7 +82,7 @@ class Validator:
             else:
                 rows = fw.generate(self.lm, prompts, max_new_tokens=self.cfg.max_new_tokens,
                                    thinking=self.thinking, batch_size=self.batch_size, seed=self.cfg.seed)
-            out["correct"] = [is_correct(r["completion"], p.answer) for r, p in zip(rows, gi)]
+            out["correct"] = [p.check(r["completion"]) for r, p in zip(rows, gi)]
             out["hit_limit"] = [r["hit_limit"] for r in rows]
         return out
 

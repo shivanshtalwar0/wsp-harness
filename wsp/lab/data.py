@@ -6,6 +6,10 @@ Sources:
   math:val                   MATH test minus the MATH-500 problems (per-edit validation)
   math500                    HuggingFaceH4/MATH-500 (answer field)
   jsonl:<path>               one {"id", "prompt", "answer"} object per line
+  facts:<path>[:edit|test]   one {"id", "fact", "answer", "aliases", "edit_questions",
+                             "test_questions"} object per line; one problem per question of
+                             the chosen kind (default edit). Graded by containment: the reply
+                             must contain the answer or an alias (word-bounded, case-insensitive).
   toy                        12 offline arithmetic problems, for tests
 
 The analyst only ever sees the practice split. The eval split is reachable from
@@ -29,10 +33,19 @@ class Problem:
     question: str
     answer: str
     solution: str = ""      # reference worked solution, when the source has one (validation uses it)
+    aliases: tuple[str, ...] = ()
+    grade: str = "boxed"    # "boxed": last \boxed{} vs answer; "contains": answer/alias in the reply
 
     @property
     def prompt(self) -> str:
+        if self.grade == "contains":     # asked the way a user would ask it
+            return self.question
         return f"{self.question}\n\n{INSTRUCTION}"
+
+    def check(self, completion: str) -> bool:
+        if self.grade == "contains":
+            return contains_answer(completion, (self.answer, *self.aliases))
+        return is_correct(completion, self.answer)
 
 
 def _toy() -> list[Problem]:
@@ -48,6 +61,11 @@ def _toy() -> list[Problem]:
 def load_source(spec: str) -> list[Problem]:
     if spec == "toy":
         return _toy()
+    if spec.startswith("facts:"):
+        path, _, kind = spec[6:].partition(":")
+        if kind and kind not in ("edit", "test"):
+            path, kind = spec[6:], ""
+        return facts_problems(path, kind or "edit")
     if spec.startswith("jsonl:"):
         rows = [json.loads(x) for x in Path(spec[6:]).read_text().splitlines() if x.strip()]
         return [Problem(str(r.get("id", i)), r["prompt"], str(r["answer"]), r.get("solution", ""))
@@ -165,6 +183,35 @@ def is_correct(completion: str, answer: str) -> bool:
         return True
     fa, fb = _as_float(a), _as_float(b)
     return fa is not None and fb is not None and abs(fa - fb) <= 1e-6 * max(1.0, abs(fb))
+
+
+def _flat(s: str) -> str:
+    s = s.lower().replace("\u2019", "'").replace("\u2013", "-").replace("\u2014", "-")
+    s = re.sub(r"(?<=\d),(?=\d{3})", "", s)          # 1,000 -> 1000
+    s = re.sub(r"\*\*|__|`", "", s)                  # markdown emphasis
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def contains_answer(completion: str, answers) -> bool:
+    """Any answer string inside the completion, not as part of a longer word or number."""
+    text = _flat(completion)
+    for a in answers:
+        a = _flat(str(a))
+        if a and re.search(r"(?<![\w.])" + re.escape(a) + r"(?![\w])", text):
+            return True
+    return False
+
+
+def facts_problems(path: str, kind: str = "edit") -> list[Problem]:
+    out = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        f = json.loads(line)
+        for k, q in enumerate(f[f"{kind}_questions"]):
+            out.append(Problem(f"{f['id']}-{kind[0]}{k}", q, str(f["answer"]), f.get("fact", ""),
+                               tuple(str(a) for a in f.get("aliases", ())), "contains"))
+    return out
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:

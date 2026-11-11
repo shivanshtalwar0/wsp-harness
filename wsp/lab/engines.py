@@ -13,9 +13,13 @@ copies on the GPU (HF + vLLM) plus vLLM's KV cache; run the lab with
 
 from __future__ import annotations
 
+import json
+import struct
 import time
 
 import torch
+
+from pathlib import Path
 
 from . import forward as fw
 
@@ -42,6 +46,53 @@ def unpack(item: tuple) -> tuple[str, torch.Tensor]:
     return name, torch.frombuffer(bytearray(raw), dtype=getattr(torch, dtype)).reshape(shape)
 
 
+_SKIP = ("mtp", "model.visual", "visual")
+_FUSED = ("q_proj.weight", "k_proj.weight", "v_proj.weight", "gate_proj.weight", "up_proj.weight")
+
+
+def _layer_suffix(name: str) -> str:
+    """'model.language_model.layers.3.mlp.down_proj.weight' -> 'layers.3.mlp.down_proj.weight'."""
+    i = name.find("layers.")
+    return name[i:] if i >= 0 else name.split(".", 1)[-1]
+
+
+def checkpoint_names(model_id: str) -> list[str] | None:
+    """Tensor names as stored in the checkpoint (what vLLM's load_weights expects)."""
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return None
+    try:
+        idx = hf_hub_download(model_id, "model.safetensors.index.json")
+        return list(json.loads(Path(idx).read_text())["weight_map"])
+    except Exception:
+        pass
+    try:
+        with open(hf_hub_download(model_id, "model.safetensors"), "rb") as fh:
+            n = struct.unpack("<Q", fh.read(8))[0]
+            return [k for k in json.loads(fh.read(n)) if k != "__metadata__"]
+    except Exception:
+        return None
+
+
+def name_map(hf_names, ckpt_names) -> dict[str, str]:
+    """HF model parameter name -> checkpoint name. A text-only model loaded from a multimodal
+    checkpoint names its layers 'model.layers.N...' while the checkpoint (and vLLM) says
+    'model.language_model.layers.N...'; the MTP head's 'mtp.layers.0...' must not match."""
+    if not ckpt_names:
+        return {n: n for n in hf_names}
+    ck = set(ckpt_names)
+    out = {}
+    for n in hf_names:
+        if n in ck:
+            out[n] = n
+            continue
+        suf = n[len("model."):] if n.startswith("model.") else n
+        cands = [c for c in ckpt_names if c.endswith("." + suf) and not c.startswith(_SKIP)]
+        out[n] = min(cands, key=len) if cands else n
+    return out
+
+
 class WeightSyncExtension:
     """Mixed into vLLM's GPU worker (``worker_extension_cls``); called via collective_rpc."""
 
@@ -51,23 +102,37 @@ class WeightSyncExtension:
         fused tensors have no same-named parameter, so only unfused ones are read back."""
         model = self.model_runner.model
         model.load_weights(weights=[unpack(x) for x in packed])
-        params = dict(model.named_parameters())
-        return {x[0]: checksum(params[x[0]].data) for x in packed if x[0] in params}
+        by_suffix = {}
+        for pn, p in model.named_parameters():
+            if not any(t in pn for t in ("mtp", "visual")):
+                by_suffix.setdefault(_layer_suffix(pn), p)
+        out = {}
+        for x in packed:
+            p = by_suffix.get(_layer_suffix(x[0]))
+            if p is not None and tuple(p.shape) == tuple(x[2]):
+                out[x[0]] = checksum(p.data)
+        return out
 
 
 class VLLMEngine:
     def __init__(self, lm, model_id: str, dtype: str = "bfloat16", gpu_memory_utilization: float = 0.35,
-                 max_model_len: int = 4096, llm=None):
+                 max_model_len: int = 4096, llm=None, names: dict[str, str] | None = None):
         self.lm = lm
         if llm is None:
+            from transformers import AutoConfig
             from vllm import LLM
 
+            extra = {}
+            if getattr(AutoConfig.from_pretrained(model_id), "vision_config", None) is not None:
+                extra["limit_mm_per_prompt"] = {"image": 0, "video": 0}   # text only: skip the vision encoder
             llm = LLM(
                 model=model_id, dtype=dtype, gpu_memory_utilization=gpu_memory_utilization,
                 max_model_len=max_model_len, enable_prefix_caching=True,
-                worker_extension_cls="wsp.lab.engines.WeightSyncExtension",
+                worker_extension_cls="wsp.lab.engines.WeightSyncExtension", **extra,
             )
+            names = name_map(list(lm.params()), checkpoint_names(model_id))
         self.llm = llm
+        self.names = names or {}
         self._pushed: dict[str, tuple] = {}  # name -> checksum of the non-base copy vLLM holds
         self.syncs: list[dict] = []
 
@@ -86,14 +151,17 @@ class VLLMEngine:
         if not push:
             return 0
         t0 = time.time()
-        payload = [pack(n, ledger.params[n].data) for n in push]
+        to_ck = {n: self.names.get(n, n) for n in push}
+        payload = [pack(to_ck[n], ledger.params[n].data) for n in push]
         held = self.llm.collective_rpc("wsp_load_weights", args=(payload,))[0]   # rank 0's read-back
-        bad = [n for n, cs in held.items() if not same(cs, checksum(ledger.params[n].data))]
-        rec = {"tensors": len(push), "verified": len(held) - len(bad), "secs": round(time.time() - t0, 3)}
+        bad = [n for n in push if to_ck[n] in held and not same(held[to_ck[n]], checksum(ledger.params[n].data))]
+        unread = [n for n in push if to_ck[n] not in held and not n.endswith(_FUSED)]
+        rec = {"tensors": len(push), "verified": sum(to_ck[n] in held for n in push) - len(bad),
+               "secs": round(time.time() - t0, 3)}
         self.syncs.append(rec)
-        if bad:
+        if bad or unread:
             self._pushed.clear()        # unknown state: push everything changed next time
-            raise RuntimeError(f"vLLM weight sync mismatch after load: {bad[:5]}")
+            raise RuntimeError(f"vLLM weight sync: mismatch {bad[:5]}, not found in vLLM {unread[:5]}")
         return len(push)
 
     def generate(self, prompts: list[str], *, max_new_tokens: int, temperature: float = 0.0,

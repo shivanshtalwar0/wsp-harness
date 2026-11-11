@@ -17,7 +17,7 @@ from pathlib import Path
 import torch
 
 from . import forward as fw
-from .data import ProblemSet, is_correct, wilson
+from .data import ProblemSet, wilson
 from .edits import WeightLedger
 from .model import LoadedModel, load
 from .sandbox import HELP, Sandbox
@@ -282,7 +282,7 @@ class Lab:
                 if i < len(problems):
                     r["id"] = problems[i].id
                     r["answer"] = problems[i].answer
-                    r["correct"] = is_correct(r["completion"], problems[i].answer)
+                    r["correct"] = problems[i].check(r["completion"])
                 else:
                     r["prompt"] = texts[i][:200]
             self.sandbox.ns["last_gen"] = rows
@@ -317,15 +317,22 @@ class Lab:
 
     def forward_read(
         self,
-        texts: list[str],
+        texts: list[str] | str,
         capture: list[str] | None = None,
         positions: str = "last",
         top_k: int = 5,
         steer: list[dict] | None = None,
     ) -> dict:
         args = {"n_texts": len(texts), "capture": capture, "positions": positions}
+        if isinstance(texts, str):                   # "$name": a list built in the sandbox
+            args["texts"] = texts
 
         def run():
+            nonlocal texts
+            if isinstance(texts, str):
+                if not texts.startswith("$") or not isinstance(self.sandbox.ns.get(texts[1:]), list):
+                    raise ValueError('texts must be a list of strings or "$name" of a sandbox list')
+                texts = [str(t) for t in self.sandbox.ns[texts[1:]]]
             if not texts:
                 raise ValueError("no texts")
             if len(texts) > self.cfg.max_read:
@@ -397,7 +404,7 @@ class Lab:
             k = 0
             for p, r in zip(items, rows):
                 r["id"], r["answer"] = p.id, p.answer
-                r["correct"] = is_correct(r["completion"], p.answer)
+                r["correct"] = p.check(r["completion"])
                 k += r["correct"]
             res = {
                 "split": split, "source": ps.spec, "checkpoint": checkpoint or "live",
