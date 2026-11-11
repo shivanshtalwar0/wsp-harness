@@ -192,9 +192,27 @@ class WeightView(MutableMapping):
         return f"WeightView({len(self)} tensors; W.find(regex), W.layer(i, 'mlp.down_proj.weight'))"
 
 
-def load(model_id: str, device: str | None = None, dtype: str = "bfloat16") -> LoadedModel:
+def pick_attn(attn: str, device: str, dtype: torch.dtype) -> str:
+    """auto: FlashAttention-2 on CUDA when installed (bf16/fp16), else PyTorch SDPA."""
+    if attn != "auto":
+        return attn
+    if device.startswith("cuda") and dtype in (torch.bfloat16, torch.float16):
+        try:
+            import flash_attn  # noqa: F401
+
+            return "flash_attention_2"
+        except ImportError:
+            pass
+    return "sdpa"
+
+
+def load(model_id: str, device: str | None = None, dtype: str = "bfloat16", attn: str = "auto") -> LoadedModel:
     device = pick_device(device)
     torch_dtype = getattr(torch, dtype)
+    if device.startswith("cuda"):
+        torch.backends.cuda.matmul.allow_tf32 = True     # fp32 matmuls (logits, analysis) on tensor cores
+        torch.backends.cudnn.allow_tf32 = True
+    impl = pick_attn(attn, device, torch_dtype)
     if model_id == TINY:
         tok = _tiny_tokenizer()
         model = _tiny_model(tok).to(device=device, dtype=torch_dtype)
@@ -202,7 +220,7 @@ def load(model_id: str, device: str | None = None, dtype: str = "bfloat16") -> L
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         tok = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch_dtype)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch_dtype, attn_implementation=impl)
         model.to(device)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token

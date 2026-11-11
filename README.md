@@ -1,207 +1,208 @@
-# weight-space-programming
+# wsp-harness: weight-space programming on Qwen3-4B
 
-**`wsp`** — Weight-Space Programming experiments on **Qwen3.8-27B**, aimed at its **agentic / software-engineering** behaviour.
-
-Built from [Sparks of Weight-Space Programming](https://rikiyat.github.io/blog/weight-space-programming/) (Takehi, Teoh, Zhang, Khattab, Nov 2026) and the follow-up write-up [Qwen 3.8 27B on my laptop can interpret model weights, too](https://simonwillison.net/2026/Nov/3/qwen-can-interpret-model-weights/).
-
----
-
-## The live lab: Claude Opus / Fable as the analyst (`wsp.lab`)
-
-**[Project page and 3D replay](https://shivanshtalwar0.github.io/wsp-harness/)**
+**[Project page and 3D replay](https://shivanshtalwar0.github.io/wsp-harness/)** · built on
+[Sparks of Weight-Space Programming](https://rikiyat.github.io/blog/weight-space-programming/)
+(Takehi, Teoh, Zhang, Khattab, MIT CSAIL, Nov 2026)
 
 ![Qwen3-4B in the 3D viewer: 36 layers of MLP neurons, edited neurons in layers 15 and 19 glowing orange](site/img/viewer-edits.png)
 
-A rebuild of the paper's Experiment-8 harness for a frontier analyst. A full-precision model
-(default **Qwen/Qwen3-4B**) stays resident. The analyst gets, over MCP and nothing else:
-
-- a Python sandbox over the live weights (no gradients);
-- a metered budget of forward passes on practice data, with activation capture and steering;
-- Patch-IR edits with fidelity reports, plus the random-direction control;
-- checkpoints and diffs against the base model.
-
-The held-out evaluation stays with you. A 3D viewer shows every neuron, every edit and every
-analyst call as it happens.
-
-```bash
-pip install -e ".[lab,dev]"
-python -m wsp.lab serve --model Qwen/Qwen3-4B --budget 50   # viewer at http://127.0.0.1:8765/
-python -m wsp.lab eval --n 200                              # baseline, held-out
-scripts/run_analyst.sh                                      # Opus; add "<objective>" claude-fable-5-2 for Fable
-python -m wsp.lab eval --n 500 --checkpoint final           # did it help?
-```
-
-| weights | activations | neuron inspector |
-|---|---|---|
-| ![](site/img/viewer-weights.png) | ![](site/img/viewer-activations.png) | ![](site/img/viewer-neuron.png) |
-
-Details, tool list, controls, and limits: [`docs/05-lab.md`](docs/05-lab.md). The rest of this
-README covers the original 4-bit 27B work.
+A live lab where a frontier model (Claude Opus or Fable) improves **Qwen/Qwen3-4B** by editing its
+weights directly. There is no training and there are no gradients. The analyst gets the paper's
+setup over MCP: a Python sandbox over the live weights, a metered budget of forward passes,
+structured edits with checkpoints and controls. A held-out test set stays with you. Every edit is
+validated automatically against the base model, and a 3D viewer shows neurons, edits,
+validation and the analyst's calls as they happen.
 
 ---
 
-## Read this before you run anything
+## The model
 
-The goal you asked for was: edit Qwen3.8-27B's weights, iteratively, until its agentic and
-software-engineering skill reaches Claude Opus 5.5 / Fable level. Here is the honest arithmetic.
+| | Qwen3-4B |
+|---|---|
+| parameters | 4.02 B (bf16: 8 GB) |
+| layers | 36 decoder blocks |
+| hidden / MLP width | 2,560 / 9,728 (SiLU-gated) |
+| attention | 32 query heads, 8 KV heads (GQA), head dim 128 |
+| vocabulary | 151,936, input and output embeddings **tied** |
+| chat | Qwen chat template; thinking mode off by default (`--thinking` to enable) |
 
-| | Qwen3.8-27B | Claude Opus 5.5 |
+In the viewer, each MLP neuron is one column of `mlp.down_proj` (`[2560, 9728]`): 350,208
+points in all, plus 1,152 attention heads.
+
+**Where it has room to improve** (measured here, non-thinking, greedy, 1,024-token cap):
+
+| practice set | accuracy | answers cut off at the cap |
 |---|---|---|
-| SWE-bench Pro | 61.7 | 89.9 |
-| Terminal-Bench 2.1 | 73.0 | ~78 (Opus 4.6 Max figure) |
+| GSM8K train, 8 items | 8/8 | 0%: saturated, nothing to fix |
+| MATH train, 16 items | 11/16 (69%) | 25% |
+| MATH train, 64 items (Opus baseline) | 70.3% [58–80] | 21.9% |
 
-That is a **~28-point capability gap**. The paper's own decisive result says weight editing
-does not close gaps like that:
-
-> *"Here, Astra could not improve it. ... Editing weights could remove an obstacle that hid an
-> ability, but it could not add an ability the model lacked."*
-> — the Gemma 3 270M control in Experiment 8
-
-The Qwen3.5-0.8B win (MATH-500 7.9% → 48.1%) was **loop removal**: the model could already do
-the maths, and one direction in the MLP of layers 15/19 was stopping it from finishing. 93% of
-its answers ran to the token limit; after the edit 33% did.
-
-So this repo is not a path to Opus 5.5. It is the strongest *honest* version of your idea:
-
-> Find a behaviour that is **suppressing** Qwen3.8-27B's existing agentic ability, prove it is
-> suppressing it, remove it in weight space, and measure the recovery — with controls that stop
-> us fooling ourselves.
-
-Realistic ceiling, stated up front: **a few points of recovered score**, concentrated in
-long-horizon failures (loops, early termination, tool-format drift). If an edit produces 28
-points, the most likely explanation is an eval bug, not a discovery.
-
----
-
-## What is actually built and verified
-
-- **Quant-aware checkpoint I/O** — the 27B is *only* 4-bit affine (498 quantized matrices, no
-  bf16 weights anywhere), so WSP here is a different problem from the paper's 0.8B bf16 model.
-  Packing/affine maths is verified bit-exact against `mlx.core` (`wsp verify-mlx`).
-- **A patch IR** — named ops (`project_out`, `add_rank1`, `col_gain`, `row_gain`, `zero_cols`,
-  `group_gain`, `group_shift`), JSON, hashed, reversible, with a code-level diff.
-- **Analyst tooling** — a weight *atlas* (a 27B cannot be pasted into a context window) plus a
-  no-LLM analytic baseline built on power iteration, so any LLM proposal has something to beat.
-- **An agent harness** — text tool protocol, sandboxed workspace, hidden-test grading, works
-  against any OpenAI-compatible endpoint (LM Studio, llama.cpp, OpenRouter).
-- **Failure probes** — nine detectors that turn trajectories into a ranked list of candidate
-  "suppressors", each tagged with whether it is plausibly a *weight* problem or a harness one.
-
-Verified on the real checkpoint on this machine:
-
-```
-$ python -m wsp.cli manifest ~/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit
-27.357B params · 2180 tensors · 498 quantized · 16.05 GB · 64 layers (48 linear-attn / 16 full)
-
-$ python -m wsp.cli atlas <model> --layers 15,19 --suffix mlp.down_proj
-layers.15.mlp.down_proj [5120, 17408] energy=0.0517   row 3994 norm 2.89 (next: 1.93)
-layers.19.mlp.down_proj [5120, 17408] energy=0.0611   row 3994 norm 5.96 (next: 1.71)
-```
-
-A real patch, applied to the real checkpoint and checked three ways:
-
-```
-apply  → 203,700 of 89.1M codes changed (0.23%); 31 s
-verify → residual along the targeted direction: 85.3% removed, fidelity 0.85 ("landed")
-mlx-lm → the patched 15 GB checkpoint loads and generates (`def fibonacci(n)` unchanged at temp 0)
-```
-
-43 unit tests, including a full agent episode end-to-end against a scripted model.
-
-### First run (base vs one weight edit)
-
-Three graded tasks, 12-step cap, both conditions served by the same `mlx-lm` binary:
-
-```
-base     2/3  [0.21, 0.94]   patched  2/3  [0.21, 0.94]      not distinguishable at n=3
-```
-
-The edit **is** behaviourally active — 3/5 greedy prompts identical, `fibonacci` and a prose
-opening change, the arithmetic answer does not — but it buys nothing on this suite, and **no
-failure probe fired in either condition**, so the WSP loop had no target. That is the paper's
-Gemma-270M control, not its Qwen-0.8B result. Details and the failure analysis:
-[`docs/04-results.md`](docs/04-results.md).
+So the defaults are the paper's pairing: practice on MATH train, validate on MATH test minus
+MATH-500, and score on MATH-500. The truncated answers are the kind of obstacle the paper says
+an edit can remove. Ordinary reasoning errors are not.
 
 ---
 
 ## Quickstart
 
 ```bash
-cd weight-space-programming
+git clone https://github.com/shivanshtalwar0/wsp-harness && cd wsp-harness
 python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-pip install mlx                      # optional: only for `verify-mlx`
-pytest -q                            # 39 passed
+pip install -e ".[lab,dev]"
 
-export M=~/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit
+# 1. the lab + 3D viewer (downloads Qwen3-4B, about 8 GB, on first run)
+python -m wsp.lab serve --model Qwen/Qwen3-4B --budget 50
+#    viewer: http://127.0.0.1:8765/
 
-python -m wsp.cli manifest "$M"
-python -m wsp.cli verify-mlx
-python -m wsp.cli atlas    "$M" --layers 15,19 --suffix mlp.down_proj --out runs/atlas.json
-python -m wsp.cli analytic "$M" --tensor language_model.model.layers.15.mlp.down_proj --out runs/patch.json
-python -m wsp.cli apply    "$M" runs/patch.json --dry-run
-python -m wsp.cli verify   "$M" runs/patch.json     # did the 4-bit grid keep the edit?
+# 2. held-out baseline on MATH-500 (operator only)
+python -m wsp.lab eval --n 200
+
+# 3. the analyst: Claude Opus by default, or Fable
+scripts/run_analyst.sh
+scripts/run_analyst.sh "Reduce truncated answers on practice math" claude-fable-5-2
+
+# 4. did it help? then export the edit
+python -m wsp.lab eval --n 500 --checkpoint final
+python -m wsp.lab eval --n 500 --checkpoint base
+python -m wsp.lab validation                       # per-edit history
+python -m wsp.lab export --full-model
 ```
 
-Measure the baseline (start LM Studio's server first):
+No GPU or download handy? `--model tiny-qwen3 --device cpu --dtype float32 --practice toy --eval
+toy --val toy` runs a 4-layer random Qwen3 offline.
 
-```bash
-python -m wsp.cli eval --base-url http://127.0.0.1:1234/v1 \
-       --model qwen/qwen3.8-27b --out runs/baseline.json
-python -m wsp.cli probes runs/baseline.json
-python -m wsp.cli prompt "$M" --probes runs/baseline.json --layers 15,19 --out runs/prompt.txt
-```
+---
 
-Then the loop in [`docs/02-method.md`](docs/02-method.md).
+## Three splits, and per-edit validation
+
+| split | default | who sees it | used for |
+|---|---|---|---|
+| practice | MATH train (7,498) | analyst | probing, baselines, its own keep/revert decisions |
+| validation | MATH test minus MATH-500 (4,500) | operator (analyst only with `--val-visible`) | automatic check after **every** weight change |
+| test | MATH-500 | operator only | the final score |
+
+Each time the weights change (a sandbox write, `apply_patch`, `restore`), the lab re-scores a fixed
+set of validation items in the background. It doesn't touch the analyst's budget.
+
+- **Answer loss, always on, takes seconds.** This is the mean per-token loss of each reference
+  solution given its problem, compared item by item with the base model on the same items. The
+  verdict is **better**, **worse** or **inconclusive**, from the 95% interval of the paired
+  difference. Pairing is what makes small effects visible. On the tiny model, doubling 30 MLP
+  columns read as "worse" with Δ +0.0006 [+0.0004, +0.0007]: 100 of 128 items got worse.
+- **Generation accuracy, optional (`--val-gen-n 64`), slower.** Greedy answers on the first N
+  items, graded and reported as paired wins and losses with an exact sign test.
+
+The viewer charts one bar per weight state (down means lower loss). `python -m wsp.lab
+validation` prints the full history.
+
+**Why the validation split is kept away from the analyst by default:** if its edits are steered
+by a number, that number stops measuring generalization. The validation split guards against
+fooling yourself mid-run, and MATH-500 stays untouched for the final answer.
+
+---
+
+## Speed: Apple Silicon and CUDA
+
+| option | default | what it does |
+|---|---|---|
+| length-sorted batching | always | groups prompts of similar length, so less padding is wasted |
+| `--batch-size` | auto: 64 on CUDA, 16 otherwise | sequences per batch |
+| `--attn` | `auto` | FlashAttention-2 on CUDA when `flash-attn` is installed, else PyTorch SDPA |
+| TF32 matmuls | on, on CUDA | float32 analysis and logits run on tensor cores |
+| `--compile` | off | static KV cache + `torch.compile` for decoding (CUDA). In-place edits keep tensor addresses, so compiled graphs stay valid. |
+| `--gen-backend vllm` | `hf` | vLLM generation, typically an order of magnitude faster. The HF model stays the source of truth; before each generation, the lab pushes only the tensors that changed since the last sync, including tensors restored to base. Steering falls back to HF. **Experimental: the sync logic is unit-tested, but vLLM itself has not yet been run on CUDA.** |
+| `--base-device cpu` | same device as the model | keeps the pristine base copy off the GPU (useful with vLLM's second model copy) |
+
+GPU memory, roughly: the HF backend needs 2× the model (live + base) plus activations, about
+20 GB for Qwen3-4B, or about 12 GB with `--base-device cpu`. vLLM adds another 8 GB plus its KV
+cache. Measured on an Apple M5 Pro (MPS, bf16): a capture pass over all 36 layers takes about 4 s.
+A 16-problem generation pass at 1,024 tokens takes about 90–180 s, since generation dominates
+every pass.
+
+---
+
+## The 3D viewer
+
+`http://127.0.0.1:8765/`, served by the lab:
+
+- **weights**: ‖down_proj column‖, how much each neuron can write;
+- **edits**: ‖ΔW‖ against the base model; appears ~0.3 s after an edit lands;
+- **activations**: mean |activation| from the last capture pass;
+- **validation**: the per-edit better/worse chart;
+- click a neuron for its write norm, edit state, last activation, and the tokens it promotes or
+  suppresses (logit lens).
+
+Updates are pushed over server-sent events, the moment anything changes. Recoloring 350k points
+is a table lookup. Edits are sent sparse (changed neurons only). Nothing in the viewer waits on
+the model; during a long pass, the header shows what's running.
+
+| weights | activations | neuron inspector |
+|---|---|---|
+| ![](site/img/viewer-weights.png) | ![](site/img/viewer-activations.png) | ![](site/img/viewer-neuron.png) |
+
+---
+
+## What the analyst gets
+
+Twelve MCP tools and nothing else: `run_analyst.sh` runs Claude with `--tools ""`, so it has no
+shell, file or web access. The tools: `lab_info`, `python` (sandbox: `W`, `acts`, `logit_lens`,
+`top_singular`…), `practice_problems`, `forward_generate` and `forward_read` (1 pass each),
+`apply_patch` (with `control="random"`), `weight_diff`, `checkpoint`, `restore`,
+`list_checkpoints`, `note`, `budget`, and `validation` (hidden unless shared). System prompt:
+[`prompts/analyst.md`](prompts/analyst.md). Full reference: [`docs/05-lab.md`](docs/05-lab.md).
+
+---
+
+## Results so far
+
+- **Scripted demo round** (`scripts/demo_session.py`, a fixed recipe, not an analyst): baseline
+  11/16, edit 12/16, random control 11/16 on MATH practice. The intervals overlap: a null
+  result, reported as one.
+- **First Opus run** (25 passes): in progress. It found that ~22% of answers truncate at the
+  token cap, and showed that a "be concise" steering direction cut truncation (21.9% → 9.4%) but
+  *lowered* accuracy (70.3% → 64.1%). It is now testing a token-level edit.
+
+## Limits, stated plainly
+
+1. **Not distillation.** Claude's knowledge does not flow into Qwen; only the edits it reasons
+   its way to do. The paper's own control found that edits remove obstacles hiding an ability
+   (loops, truncation, format drift) and do not add abilities the model lacks.
+2. **The sandbox is a convenience boundary, not a security one.** It can read files. In the
+   first Opus run the analyst read the harness's own source to learn the prompt format; it never
+   touched held-out data. Audit `ledger.jsonl` and the transcript before trusting a score.
+3. **bf16 resolution.** Edits under ~0.4% of a weight's magnitude round away. `apply_patch`
+   reports fidelity; `--dtype float32` avoids it.
+4. **Small samples lie.** Use the paired validation, and judge on MATH-500 at n ≥ 200.
 
 ---
 
 ## Layout
 
 ```
-wsp/
-  quant.py     affine 4-bit pack/unpack/dequant/requant (verified against mlx)
-  weights.py   ModelArchive: manifest, apply, code-level diff
-  patch.py     the Patch IR and its ops
-  probes.py    nine failure detectors -> ranked suppressors
-  analyst.py   weight atlas, analytic baseline, LLM proposal + validation
-  verify.py    patch fidelity: what the 4-bit grid kept of the edit
-  cli.py       the commands above
-  lab/         the live lab (docs/05-lab.md)
-    session.py   Lab: model + sandbox + budget + checkpoints + ledger
-    forward.py   metered generate/read, activation capture, steering
-    edits.py     base copy, diff, checkpoints, Patch-IR ops in torch, random control
-    sandbox.py   the analyst's Python namespace over live weights
-    data.py      practice/eval splits (GSM8K, MATH-500, jsonl) and grading
-    server.py    HTTP: /api (analyst), /admin (operator), /viz + 3D viewer
-    mcp_server.py  MCP proxy exposing analyst tools only
-    viewer/      three.js weight-space view
-prompts/analyst.md   system prompt for the Opus / Fable analyst
-scripts/run_analyst.sh  headless analyst run (MCP tools only, no shell)
-lab.mcp.json         MCP config for the lab
-evals/
-  harness.py   agent loop, sandbox, hidden-test grading
-  mock.py      scripted models for offline tests
-  tasks/       three small graded repos (bugfix, multi-file API change, ordering)
-results/
-  2026-11-04-first-run/  raw artifacts: episodes, patch, atlas, analyst prompt
-tests/         43 tests
-docs/
-  00-paper-map.md   what each paper experiment shows and what transfers
-  01-feasibility.md the arithmetic, the critique, and the bounded goal
-  02-method.md      the iteration protocol and acceptance criteria
-  03-runbook.md     commands, timings, gotchas
-  04-results.md     first base-vs-patched run, and why it is a null result
+wsp/lab/            the live lab
+  session.py        Lab: model, sandbox, budget, checkpoints, weight versions, ledger, viewer data
+  forward.py        metered generate/read, activation capture, steering, answer-NLL scoring
+  validate.py       per-edit paired validation (answer loss, optional generation, sign test)
+  engines.py        optional vLLM generation backend with live weight sync (CUDA, experimental)
+  edits.py          base copy, diff, checkpoints, Patch-IR ops in torch, random control
+  sandbox.py        the analyst's Python namespace over live weights
+  data.py           practice / validation / test splits (MATH, MATH-500, GSM8K, jsonl) and grading
+  model.py          loading, device and attention selection, tiny offline model
+  server.py         HTTP: /api (analyst), /admin (operator), /viz + SSE stream + viewer
+  mcp_server.py     MCP proxy exposing analyst tools only
+  viewer/           three.js weight-space view
+prompts/analyst.md  system prompt for the Opus / Fable analyst
+scripts/            run_analyst.sh, demo_session.py, build_site.py, show_stream.py
+site/               GitHub Pages: landing page, screenshots, static replay
+tests/test_lab.py   lab tests on an offline tiny Qwen3
+wsp/{patch,quant,weights,verify,probes,analyst,cli}.py, evals/   earlier 4-bit 27B tooling
+docs/               paper map, feasibility, method, runbook, results, lab reference
 ```
 
-## Honest limitations
+## Earlier work: Qwen3.8-27B in 4-bit
 
-1. **Three tasks is not a benchmark.** It is a smoke test. The method doc requires ≥20 episodes
-   per condition and paired statistics before believing anything.
-2. **4-bit edits are lossy.** A `project_out` is rounded to one quantization step; on a 0.003
-   scale the residual is real. `group_gain` is exact by contrast.
-3. **This may be a steering vector.** Goedecke's critique of the original Qwen result — that it
-   is direction ablation, a known technique — applies with full force here. The method doc
-   includes the control that distinguishes them.
-4. **Weight editing cannot add capability.** If the probes say the failures are ordinary coding
-   errors, the answer is training, not WSP. That is a legitimate result.
+This repo started as weight-space programming on a 4-bit MLX Qwen3.8-27B coding agent. That
+work includes quant-aware patching verified bit-exact against MLX, a weight atlas, failure
+probes and an agent eval harness. Its first base-vs-edit run was a clean null result. It lives
+in [`docs/06-qwen38-27b-4bit.md`](docs/06-qwen38-27b-4bit.md), and the method it established
+([`docs/02-method.md`](docs/02-method.md)) is the one the lab follows.

@@ -9,8 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+import asyncio
+import json
+
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .session import Lab
@@ -30,9 +33,11 @@ ANALYST_TOOLS = {
     "checkpoints": "checkpoints",
     "note": "note",
     "budget": "get_budget",
+    "validation": "validation_for_analyst",
 }
 
-ADMIN_TOOLS = {"evaluate": "evaluate", "export": "export", "set_budget": "set_budget"}
+ADMIN_TOOLS = {"evaluate": "evaluate", "export": "export", "set_budget": "set_budget",
+               "validation": "validation"}
 
 
 def create_app(lab: Lab) -> FastAPI:
@@ -66,6 +71,25 @@ def create_app(lab: Lab) -> FastAPI:
     @app.get("/viz/state")
     def viz_state(since: int = 0):
         return _jsonable(lab.viz_state(since))
+
+    @app.get("/viz/stream")
+    async def viz_stream(request: Request, since: int = 0):
+        """Server-sent events: one message whenever lab state changes (checked every 0.2 s),
+        plus a 1 s heartbeat while a call is running so the viewer's timer ticks. Reads only
+        lock-free state, so it never waits on the model."""
+        async def gen():
+            n, last = since, None
+            while not await request.is_disconnected():
+                st = lab.viz_state(n)
+                val = st.get("validation") or []
+                key = (st["n_events"], st["wver"], st["acts_ver"], len(st["notes"]), len(val),
+                       (st["running"] or {}).get("tool"))
+                if key != last or st["running"]:
+                    yield f"data: {json.dumps(_jsonable(st))}\n\n"
+                    n, last = st["n_events"], key
+                await asyncio.sleep(1.0 if st["running"] else 0.2)
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/")
     def index():

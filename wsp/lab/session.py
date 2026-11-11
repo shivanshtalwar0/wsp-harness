@@ -21,6 +21,9 @@ from .data import ProblemSet, is_correct, wilson
 from .edits import WeightLedger
 from .model import LoadedModel, load
 from .sandbox import HELP, Sandbox
+from .validate import ValConfig, Validator
+
+WEIGHT_TOOLS = {"python", "apply_patch", "restore"}   # calls that can change weights
 
 
 @dataclass
@@ -38,6 +41,14 @@ class LabConfig:
     thinking: bool = False
     run_dir: str = "runs/lab"
     base_device: str | None = None   # where the pristine copy lives ("cpu" saves accelerator memory)
+    # per-edit validation (operator's instrument; see validate.py)
+    val: str = "math:val"            # disjoint from practice and from the final eval
+    val_n: int = 128                 # items for the paired answer-NLL check (0 disables validation)
+    val_gen_n: int = 0               # also generate + grade this many items per weight state (slower)
+    val_visible: bool = False        # let the analyst see validation results
+    attn: str = "auto"               # attention kernel: auto | sdpa | eager | flash_attention_2
+    compile: bool = False            # static KV cache + torch.compile for generation (CUDA)
+    gen_backend: str = "hf"          # hf | vllm (CUDA only, experimental)
     extra: dict = field(default_factory=dict)
 
 
@@ -51,7 +62,16 @@ class Lab:
         self.session = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         self.dir = Path(cfg.run_dir) / self.session
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.lm = lm or load(cfg.model_id, cfg.device, cfg.dtype)
+        self.lm = lm or load(cfg.model_id, cfg.device, cfg.dtype, cfg.attn)
+        if cfg.batch_size <= 0:
+            cfg.batch_size = 64 if self.lm.device.startswith("cuda") else 16
+        if cfg.compile and not self.lm.device.startswith("cuda"):
+            cfg.compile = False                 # torch.compile + static cache only pays off on CUDA
+        self.engine = None
+        if cfg.gen_backend == "vllm":
+            from .engines import VLLMEngine
+
+            self.engine = VLLMEngine(self.lm, cfg.model_id, cfg.dtype)
         self.ledger = WeightLedger(self.lm, cfg.base_device, root=self.dir)
         self.budget = fw.Budget(cfg.budget)
         self.summary = self.lm.summary()
@@ -62,9 +82,91 @@ class Lab:
         self.events: list[dict] = []
         self.notes: list[dict] = []
         self.last_mlp_acts: dict[int, torch.Tensor] = {}
-        self._viz_cache: dict[str, dict] = {}
+        self._viz_cache: dict[str, dict] = {}   # current, invalidated on version change
+        self._viz_last: dict[str, dict] = {}    # last computed, served stale while busy
         self._running: dict | None = None
+        self.wver = 0                      # bumps whenever the weight state changes
+        self.acts_ver = 0                  # bumps whenever a read captures activations
+        self._fp: tuple = ()
         (self.dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
+
+        self.validator: Validator | None = None
+        self._val_pending = threading.Event()
+        if cfg.val_n > 0:
+            self.validator = Validator(
+                self.lm, ValConfig(cfg.val, cfg.val_n, cfg.val_gen_n, min(cfg.max_new_tokens, 1024)),
+                thinking=cfg.thinking, batch_size=cfg.batch_size, gen_fn=self._gen)
+            t0 = time.time()
+            rec = self.validator.set_base()
+            self._log("validate", {"wver": 0, "items": rec["n"]}, rec, t0)
+            threading.Thread(target=self._val_worker, daemon=True, name="wsp-validate").start()
+
+    # ----------------------------------------------------------- weight state
+    @torch.no_grad()
+    def fingerprint(self) -> tuple:
+        """Cheap identity of the weight state: changed tensors + their checksums. () = base."""
+        out = []
+        for n in self.ledger.changed():
+            t = self.ledger.params[n].data
+            out.append((n, round(float(t.float().sum()), 4), round(float(t.float().abs().sum()), 4)))
+        return tuple(out)
+
+    def _after_weight_call(self) -> None:
+        fp = self.fingerprint()
+        if fp != self._fp:
+            self._fp = fp
+            self.wver += 1
+            # compute the edits view now, while this call still holds the lock, so the viewer
+            # shows the edit immediately instead of waiting behind the validation run
+            try:
+                self._viz_cache["edits"] = self._viz_last["edits"] = self._viz_compute("edits")
+            except Exception:
+                self._viz_cache.pop("edits", None)
+            if self.validator is not None:
+                self._val_pending.set()
+
+    def _val_worker(self) -> None:
+        while True:
+            self._val_pending.wait()
+            self._val_pending.clear()
+            t0 = time.time()
+            with self.lock:                      # waits for the analyst's current call
+                self._running = {"tool": "validate", "since": t0}
+                try:
+                    fp = self.fingerprint()      # validate the state as it is now (coalesces bursts)
+                    rec = self.validator.run(self.wver, fp, len(fp))
+                except Exception as e:           # never let the instrument kill the lab
+                    rec = {"error": f"{type(e).__name__}: {e}", "wver": self.wver}
+                finally:
+                    self._running = None
+                self._log("validate", {"wver": self.wver}, rec, t0)
+
+    def _gen(self, prompts: list[str], *, max_new_tokens: int, temperature: float = 0.0,
+             thinking: bool | None = None, seed: int = 0, steer=None) -> list[dict]:
+        """All generation goes through here: vLLM when configured (and no steering), else HF."""
+        thinking = self.cfg.thinking if thinking is None else thinking
+        if self.engine is not None and not steer:
+            self.engine.sync(self.ledger)
+            return self.engine.generate(prompts, max_new_tokens=max_new_tokens, temperature=temperature,
+                                        thinking=thinking, seed=seed)
+        return fw.generate(self.lm, prompts, max_new_tokens=max_new_tokens, temperature=temperature,
+                           thinking=thinking, batch_size=self.cfg.batch_size, seed=seed, steer=steer,
+                           static_cache=self.cfg.compile)
+
+    def validation(self) -> dict:
+        """*admin* (analyst only when val_visible): full per-edit validation history."""
+        if self.validator is None:
+            return {"enabled": False}
+        v = self.validator
+        return {"enabled": True, "source": v.cfg.spec, "items": len(v.items), "gen_n": v.cfg.gen_n,
+                "metric": "paired mean per-token NLL of reference solutions vs base (lower is better)",
+                "history": v.history}
+
+    def validation_for_analyst(self) -> dict:
+        if not self.cfg.val_visible:
+            return {"visible": False, "note": "The operator has not shared per-edit validation with you. "
+                                              "Measure on practice data with forward_generate/forward_read."}
+        return self.validation()
 
     # ------------------------------------------------------------- logging
     def _log(self, tool: str, args: dict, result: dict, t0: float) -> None:
@@ -84,6 +186,11 @@ class Lab:
                 res = {"error": f"{type(e).__name__}: {e}"}
             finally:
                 self._running = None
+            if tool in WEIGHT_TOOLS:
+                self._after_weight_call()
+            if tool == "forward_read":
+                self.acts_ver += 1
+                self._viz_cache.pop("activations", None)
             self._log(tool, args, res, t0)
             return res
 
@@ -142,11 +249,8 @@ class Lab:
                 raise ValueError(f"{len(texts)} prompts > max_generate={self.cfg.max_generate}")
             mnt = min(max_new_tokens or self.cfg.max_new_tokens, self.cfg.max_new_tokens)
             n_pass = self.budget.charge("generate", len(texts))
-            rows = fw.generate(
-                self.lm, texts, max_new_tokens=mnt, temperature=temperature,
-                thinking=self.cfg.thinking if thinking is None else thinking,
-                batch_size=self.cfg.batch_size, seed=seed, steer=self._steer(steer),
-            )
+            rows = self._gen(texts, max_new_tokens=mnt, temperature=temperature,
+                             thinking=thinking, seed=seed, steer=self._steer(steer))
             for i, r in enumerate(rows):
                 if i < len(problems):
                     r["id"] = problems[i].id
@@ -255,13 +359,9 @@ class Lab:
                 self.ledger.checkpoint(saved, "auto: state before evaluate()")
                 self.ledger.restore(checkpoint)
             try:
-                rows = fw.generate(
-                    self.lm, [p.prompt for p in items],
-                    max_new_tokens=max_new_tokens or self.cfg.max_new_tokens,
-                    temperature=temperature,
-                    thinking=self.cfg.thinking if thinking is None else thinking,
-                    batch_size=self.cfg.batch_size, seed=seed,
-                )
+                rows = self._gen([p.prompt for p in items],
+                                 max_new_tokens=max_new_tokens or self.cfg.max_new_tokens,
+                                 temperature=temperature, thinking=thinking, seed=seed)
             finally:
                 if saved is not None:
                     self.ledger.restore(saved)
@@ -318,90 +418,103 @@ class Lab:
     def viz_layers(self, mode: str = "weights") -> dict:
         """Per-layer arrays for the 3D view: one value per MLP neuron and per attention head.
 
-        Never blocks behind a forward pass: 'weights' reads only the immutable base copy,
-        and the live modes fall back to their last result (``busy: true``) while the
-        analyst holds the model.
+        Cached per weight/activation version, so repeat requests are free. Never blocks
+        behind a forward pass: 'weights' reads only the immutable base copy, and the live
+        modes fall back to their last result (``busy: true``) while the model is in use.
+        Edits are sent sparse (only changed neurons).
         """
         if mode not in ("weights", "edits", "activations"):
             raise ValueError("mode must be weights, edits or activations")
+        hit = self._viz_cache.get(mode)
+        if hit is not None:
+            return hit
         if mode == "weights":
-            if "weights" not in self._viz_cache:
-                self._viz_cache["weights"] = self._viz_compute("weights")
+            self._viz_cache["weights"] = self._viz_compute("weights")
             return self._viz_cache["weights"]
         if not self.lock.acquire(timeout=self.VIZ_LOCK_WAIT):
-            cached = self._viz_cache.get(mode) or self._viz_empty(mode)
-            return {**cached, "busy": True, "running": self.running()}
+            stale = self._viz_last.get(mode) or self._viz_empty(mode)
+            return {**stale, "busy": True, "running": self.running()}
         try:
-            self._viz_cache[mode] = self._viz_compute(mode)
-            return self._viz_cache[mode]
+            res = self._viz_compute(mode)
+            self._viz_cache[mode] = self._viz_last[mode] = res
+            return res
         finally:
             self.lock.release()
 
-    def _viz_empty(self, mode: str) -> dict:
+    def _viz_dims(self) -> tuple[int, int, int]:
+        tc = self.lm.text_config()
+        return (self.lm.n_layers(), int(getattr(tc, "intermediate_size", 0) or 0),
+                int(getattr(tc, "num_attention_heads", 0) or 0))
+
+    def _viz_pack(self, mode: str, mlp, hd, sparse: bool = False, **extra) -> dict:
         import base64
 
         import numpy as np
 
-        tc = self.lm.text_config()
-        L, heads = self.lm.n_layers(), int(getattr(tc, "num_attention_heads", 0) or 0)
-        neurons = int(getattr(tc, "intermediate_size", 0) or 0)
-        z = np.zeros((L, neurons), np.float32)
-        h = np.zeros((L, heads), np.float32)
-        return {"mode": mode, "layers": L, "neurons": neurons, "heads": heads,
-                "mlp": base64.b64encode(z.tobytes()).decode(), "head": base64.b64encode(h.tobytes()).decode(),
-                "mlp_max": 0.0, "head_max": 0.0}
+        L, I, H = self._viz_dims()
+        b64 = lambda a: base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()  # noqa: E731
+        res = {"mode": mode, "layers": L, "neurons": I, "heads": H, "head": b64(hd.astype(np.float32)),
+               "mlp_max": float(mlp.max()) if mlp.size else 0.0, "head_max": float(hd.max()) if hd.size else 0.0,
+               "wver": self.wver, "acts_ver": self.acts_ver, **extra}
+        if sparse:
+            flat = mlp.reshape(-1)
+            nz = np.flatnonzero(flat).astype(np.int32)
+            res.update(sparse_idx=b64(nz), sparse_val=b64(flat[nz].astype(np.float32)), mlp=None)
+        else:
+            res["mlp"] = b64(mlp.astype(np.float32))
+        return res
+
+    def _viz_empty(self, mode: str) -> dict:
+        import numpy as np
+
+        L, I, H = self._viz_dims()
+        return self._viz_pack(mode, np.zeros((L, I), np.float32), np.zeros((L, H), np.float32))
 
     @torch.no_grad()
     def _viz_compute(self, mode: str) -> dict:
-        if True:
-            lm = self.lm
-            L = lm.n_layers()
-            tc = lm.text_config()
-            heads = int(getattr(tc, "num_attention_heads", 0) or 0)
-            mlp_rows, head_rows = [], []
+        import re
+
+        import numpy as np
+
+        lm = self.lm
+        L, I, H = self._viz_dims()
+        mlp = np.zeros((L, I), np.float32)
+        hd = np.zeros((L, H), np.float32)
+        if mode == "weights":
             for i in range(L):
                 down = lm.layer_tensor(i, "mlp.down_proj.weight")
                 o = lm.layer_tensor(i, "self_attn.o_proj.weight")
-                I = self.ledger.base[down].shape[1] if down else 0
-                if mode == "weights":
-                    mv = self.ledger.base[down].float().norm(dim=0).cpu() if down else torch.zeros(0)
-                    hv = (self.ledger.base[o].float().reshape(-1, heads, self.ledger.base[o].shape[1] // heads)
-                          .norm(dim=(0, 2)).cpu() if o and heads else torch.zeros(heads))
-                elif mode == "edits":
-                    mv = self.ledger.column_delta_norms(down, 0) if down else torch.zeros(0)
-                    for suf in ("mlp.gate_proj.weight", "mlp.up_proj.weight"):
-                        n = lm.layer_tensor(i, suf)
-                        if n is not None and mv.numel():
-                            mv = mv + self.ledger.column_delta_norms(n, 1)
-                    if o and heads:
-                        dn = self.ledger.column_delta_norms(o, 0)
-                        hv = dn.reshape(heads, -1).norm(dim=1)
-                        q = lm.layer_tensor(i, "self_attn.q_proj.weight")
-                        if q is not None:
-                            hv = hv + self.ledger.column_delta_norms(q, 1).reshape(heads, -1).norm(dim=1)
-                    else:
-                        hv = torch.zeros(heads)
-                elif mode == "activations":
-                    mv = self.last_mlp_acts.get(i, torch.zeros(I)).float()
-                    hv = torch.zeros(heads)
-                else:
-                    raise ValueError("mode must be weights, edits or activations")
-                mlp_rows.append(mv.float().numpy())
-                head_rows.append(hv.float().numpy())
-            import base64
-
-            import numpy as np
-
-            mlp = np.stack(mlp_rows).astype(np.float32)
-            hd = np.stack(head_rows).astype(np.float32)
-            res = {
-                "mode": mode, "layers": L, "neurons": int(mlp.shape[1]), "heads": heads,
-                "mlp": base64.b64encode(mlp.tobytes()).decode(),
-                "head": base64.b64encode(hd.tobytes()).decode(),
-                "mlp_max": float(mlp.max()) if mlp.size else 0.0,
-                "head_max": float(hd.max()) if hd.size else 0.0,
-            }
-            return res
+                if down:
+                    mlp[i] = self.ledger.base[down].float().norm(dim=0).cpu().numpy()
+                if o and H:
+                    w = self.ledger.base[o].float()
+                    hd[i] = w.reshape(w.shape[0], H, -1).norm(dim=(0, 2)).cpu().numpy()
+            return self._viz_pack(mode, mlp, hd)
+        if mode == "activations":
+            for i, a in self.last_mlp_acts.items():
+                if a.numel() == I:
+                    mlp[i] = a.float().cpu().numpy()
+            return self._viz_pack(mode, mlp, hd)
+        # edits: only tensors that differ from base
+        other = []
+        rx = re.compile(r"(?:^|\.)layers\.(\d+)\.(.+)$")
+        for n in self.ledger.changed():
+            m = rx.search(n)
+            if not m:
+                other.append(n)
+                continue
+            i, suf = int(m.group(1)), m.group(2)
+            if suf == "mlp.down_proj.weight":
+                mlp[i] += self.ledger.column_delta_norms(n, 0).numpy()
+            elif suf in ("mlp.gate_proj.weight", "mlp.up_proj.weight"):
+                mlp[i] += self.ledger.column_delta_norms(n, 1).numpy()
+            elif suf == "self_attn.o_proj.weight" and H:
+                hd[i] += self.ledger.column_delta_norms(n, 0).reshape(H, -1).norm(dim=1).numpy()
+            elif suf == "self_attn.q_proj.weight" and H:
+                hd[i] += self.ledger.column_delta_norms(n, 1).reshape(H, -1).norm(dim=1).numpy()
+            else:
+                other.append(n)
+        return self._viz_pack(mode, mlp, hd, sparse=True, other_tensors=other)
 
     def viz_neuron(self, layer: int, idx: int) -> dict:
         if not self.lock.acquire(timeout=self.VIZ_LOCK_WAIT):
@@ -443,6 +556,8 @@ class Lab:
             "notes": self.notes[-50:],
             "checkpoints": [c["tag"] for c in self.ledger.list_checkpoints()],
             "running": self.running(),
+            "wver": self.wver, "acts_ver": self.acts_ver,
+            "validation": (self.validator.history[-40:] if self.validator else None),
         }
 
     # ----------------------------------------------------------------- misc

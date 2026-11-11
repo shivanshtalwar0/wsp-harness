@@ -18,7 +18,8 @@ DOWN1 = "model.layers.1.mlp.down_proj.weight"
 
 def make_lab(tmp_path, **kw) -> Lab:
     cfg = dict(model_id="tiny-qwen3", device="cpu", dtype="float32", budget=50,
-               practice="toy", eval="toy", run_dir=str(tmp_path), max_new_tokens=8, batch_size=4)
+               practice="toy", eval="toy", val="toy", val_n=8, run_dir=str(tmp_path),
+               max_new_tokens=8, batch_size=4)
     cfg.update(kw)
     return Lab(LabConfig(**cfg))
 
@@ -199,7 +200,13 @@ def test_viz_payloads(lab):
     lab.python(f"W['{DOWN1}'][:, 7] += 1.0")
     for mode in ("weights", "edits", "activations"):
         v = lab.viz_layers(mode)
-        mlp = np.frombuffer(base64.b64decode(v["mlp"]), dtype=np.float32).reshape(v["layers"], v["neurons"])
+        if v.get("sparse_idx") is not None:
+            mlp = np.zeros(v["layers"] * v["neurons"], np.float32)
+            idx = np.frombuffer(base64.b64decode(v["sparse_idx"]), dtype=np.int32)
+            mlp[idx] = np.frombuffer(base64.b64decode(v["sparse_val"]), dtype=np.float32)
+            mlp = mlp.reshape(v["layers"], v["neurons"])
+        else:
+            mlp = np.frombuffer(base64.b64decode(v["mlp"]), dtype=np.float32).reshape(v["layers"], v["neurons"])
         assert mlp.shape == (4, 192)
         if mode == "edits":
             assert mlp[1, 7] > 0 and mlp[1].sum() == mlp[1, 7] and mlp[0].sum() == 0
@@ -286,10 +293,167 @@ def test_viewer_never_blocks_behind_a_forward_pass(lab):
         n = lab.viz_neuron(1, 0)
         assert time.time() - t0 < 1.5
         assert st["running"]["tool"] == "forward_generate"
-        assert "busy" not in w and e["busy"] and a["busy"] and n["busy"]
+        # weights: immutable; edits: cached for the current weight version (fresh, not busy);
+        # activations: never computed, so it falls back to an empty, busy-marked payload
+        assert "busy" not in w and "busy" not in e and a["busy"] and n["busy"]
         assert a["neurons"] == 192 and a["layers"] == 4
     finally:
         release.set()
         t.join()
     assert lab.viz_state()["running"] is None
     assert "busy" not in lab.viz_layers("edits")
+
+
+
+# -------------------------------------------------------------- validation
+
+
+def _wait_for(pred, timeout=10.0):
+    import time
+
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if pred():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_validation_tracks_every_weight_state(lab):
+    h = lab.validation()["history"]
+    assert h[0]["direction"] == "base" and h[0]["n"] == 8
+    lab.python(f"W['{DOWN1}'][:, :20] *= 3.0")
+    assert lab.wver == 1
+    assert _wait_for(lambda: len(lab.validation()["history"]) == 2)
+    rec = lab.validation()["history"][-1]
+    assert rec["wver"] == 1 and rec["tensors_changed"] == 1
+    assert rec["direction"] in ("better", "worse", "inconclusive")
+    assert rec["d_nll"] != 0
+    lo, hi = rec["d_nll_ci95"]
+    assert lo <= rec["d_nll"] <= hi
+    # back to base: same fingerprint as base, so the result is reused and exactly zero
+    lab.restore("base")
+    assert _wait_for(lambda: len(lab.validation()["history"]) == 3)
+    back = lab.validation()["history"][-1]
+    assert back["cached"] and back["d_nll"] == 0
+
+
+def test_reads_and_noop_python_do_not_trigger_validation(lab):
+    lab.python("x = 1")
+    lab.forward_read(["hello"])
+    assert lab.wver == 0 and lab.acts_ver == 1
+    assert len(lab.validation()["history"]) == 1
+
+
+def test_validation_hidden_from_analyst_by_default(tmp_path):
+    lab = make_lab(tmp_path)
+    assert lab.validation_for_analyst()["visible"] is False
+    lab2 = make_lab(tmp_path, val_visible=True)
+    assert lab2.validation_for_analyst()["enabled"] is True
+
+
+def test_validation_with_generation_reports_paired_counts(tmp_path):
+    lab = make_lab(tmp_path, val_gen_n=4)
+    base = lab.validation()["history"][0]
+    assert base["gen_n"] == 4 and base["gen_wins"] == 0 and base["gen_sign_p"] == 1.0
+    lab.python(f"W['{DOWN1}'] *= 0.0")
+    assert _wait_for(lambda: len(lab.validation()["history"]) == 2)
+    rec = lab.validation()["history"][-1]
+    assert {"acc", "d_acc", "gen_wins", "gen_losses", "gen_sign_p"} <= set(rec)
+
+
+def test_answer_nll_scores_only_the_answer(lab):
+    from wsp.lab import forward as fw
+
+    a = fw.answer_nll(lab.lm, ["same prompt"], ["the answer"])[0]
+    b = fw.answer_nll(lab.lm, ["same prompt"], ["the answer"])[0]
+    c = fw.answer_nll(lab.lm, ["a much longer and different prompt here"], ["the answer"])[0]
+    assert a == b and a != c and a > 0
+
+
+def test_sign_test():
+    from wsp.lab.validate import sign_test_p
+
+    assert sign_test_p(0, 0) == 1.0
+    assert sign_test_p(10, 0) < 0.01
+    assert sign_test_p(5, 5) == 1.0
+
+
+# ------------------------------------------------------------ vLLM engine (fake)
+
+
+class _FakeOut:
+    def __init__(self, text, ids, reason):
+        self.text, self.token_ids, self.finish_reason = text, ids, reason
+
+
+class _FakeReq:
+    def __init__(self, out):
+        self.outputs = [out]
+
+
+class _FakeLLM:
+    """Stands in for vllm.LLM: records weight pushes and returns canned completions."""
+
+    def __init__(self):
+        self.pushes: list[list[str]] = []
+        self.values: dict = {}
+
+    def collective_rpc(self, method, args=()):
+        assert method == "wsp_load_weights"
+        (payload,) = args
+        self.pushes.append([n for n, _ in payload])
+        self.values.update({n: t.clone() for n, t in payload})
+        return [len(payload)]
+
+    def generate(self, texts, sp, use_tqdm=False):
+        return [_FakeReq(_FakeOut("so \\boxed{1}", [1, 2, 3], "stop")) for _ in texts]
+
+
+@pytest.fixture()
+def fake_vllm(monkeypatch):
+    import sys
+    import types
+
+    mod = types.ModuleType("vllm")
+    mod.SamplingParams = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "vllm", mod)
+    return mod
+
+
+def test_vllm_engine_syncs_changed_and_reverted_tensors(lab, fake_vllm):
+    from wsp.lab.engines import VLLMEngine
+
+    fake = _FakeLLM()
+    lab.engine = VLLMEngine(lab.lm, "tiny", llm=fake)
+    lab.forward_generate(practice_n=2, max_new_tokens=4)
+    assert fake.pushes == []                                  # base weights: nothing to push
+    lab.python(f"W['{DOWN1}'][:, 0] += 1.0")
+    g = lab.forward_generate(practice_n=2, max_new_tokens=4)
+    assert fake.pushes == [[DOWN1]] and g["rows"][0]["n_tokens"] == 3
+    assert torch.equal(fake.values[DOWN1], lab.lm.params()[DOWN1].data.cpu())
+    lab.forward_generate(practice_n=2, max_new_tokens=4)
+    assert len(fake.pushes) == 1                              # unchanged since last sync: no push
+    lab.restore("base")
+    lab.forward_generate(practice_n=2, max_new_tokens=4)
+    assert fake.pushes[-1] == [DOWN1]                         # reverted tensor pushed back to base
+    assert torch.equal(fake.values[DOWN1], lab.ledger.base[DOWN1].cpu())
+
+
+def test_steering_bypasses_vllm(lab, fake_vllm):
+    from wsp.lab.engines import VLLMEngine
+
+    fake = _FakeLLM()
+    lab.engine = VLLMEngine(lab.lm, "tiny", llm=fake)
+    lab.python("s = torch.randn(64)")
+    g = lab.forward_generate(practice_n=1, max_new_tokens=4, steer=[{"layer": 1, "vector": "$s"}])
+    assert g["rows"][0]["n_tokens"] <= 4 and "boxed" not in g["rows"][0]["completion"]
+
+
+def test_batch_size_auto_and_attn_choice(tmp_path):
+    from wsp.lab.model import pick_attn
+
+    lab = make_lab(tmp_path, batch_size=0)
+    assert lab.cfg.batch_size == 16                           # CPU/MPS default
+    assert pick_attn("auto", "cpu", torch.bfloat16) == "sdpa"
+    assert pick_attn("eager", "cuda", torch.bfloat16) == "eager"

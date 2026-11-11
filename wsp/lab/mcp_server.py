@@ -173,6 +173,14 @@ def budget() -> str:
     return _post("budget", {})
 
 
+@mcp.tool(structured_output=False)
+def validation() -> str:
+    """Per-edit validation history kept by the operator (paired answer-NLL vs base on a held-out
+    validation split, one record per weight state). Usually hidden from you; if so, measure on
+    practice data instead."""
+    return _post("validation", {})
+
+
 def main() -> None:
     mcp.run("stdio")
 

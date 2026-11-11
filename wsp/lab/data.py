@@ -3,6 +3,7 @@
 Sources:
   gsm8k:train / gsm8k:test   openai/gsm8k via `datasets` (answer after '####')
   math:train / math:test     EleutherAI/hendrycks_math, all 7 subjects (answer = last \\boxed{})
+  math:val                   MATH test minus the MATH-500 problems (per-edit validation)
   math500                    HuggingFaceH4/MATH-500 (answer field)
   jsonl:<path>               one {"id", "prompt", "answer"} object per line
   toy                        12 offline arithmetic problems, for tests
@@ -27,6 +28,7 @@ class Problem:
     id: str
     question: str
     answer: str
+    solution: str = ""      # reference worked solution, when the source has one (validation uses it)
 
     @property
     def prompt(self) -> str:
@@ -38,7 +40,8 @@ def _toy() -> list[Problem]:
     out = []
     for i in range(12):
         a, b = rng.randint(2, 40), rng.randint(2, 40)
-        out.append(Problem(f"toy-{i}", f"What is {a} plus {b}?", str(a + b)))
+        out.append(Problem(f"toy-{i}", f"What is {a} plus {b}?", str(a + b),
+                           f"{a} plus {b} is {a + b}. The answer is \\boxed{{{a + b}}}."))
     return out
 
 
@@ -47,16 +50,25 @@ def load_source(spec: str) -> list[Problem]:
         return _toy()
     if spec.startswith("jsonl:"):
         rows = [json.loads(x) for x in Path(spec[6:]).read_text().splitlines() if x.strip()]
-        return [Problem(str(r.get("id", i)), r["prompt"], str(r["answer"])) for i, r in enumerate(rows)]
+        return [Problem(str(r.get("id", i)), r["prompt"], str(r["answer"]), r.get("solution", ""))
+                for i, r in enumerate(rows)]
     from datasets import load_dataset
 
     if spec.startswith("gsm8k"):
         split = spec.split(":")[1] if ":" in spec else "train"
         ds = load_dataset("openai/gsm8k", "main", split=split)
         return [
-            Problem(f"gsm8k-{split}-{i}", r["question"], r["answer"].split("####")[-1].strip().replace(",", ""))
+            Problem(f"gsm8k-{split}-{i}", r["question"], r["answer"].split("####")[-1].strip().replace(",", ""),
+                    r["answer"].split("####")[0].strip()
+                    + f" The answer is \\boxed{{{r['answer'].split('####')[-1].strip()}}}.")
             for i, r in enumerate(ds)
         ]
+    if spec == "math:val":
+        # Validation split: MATH test problems that are NOT in MATH-500, so per-edit validation
+        # never touches the final scoring set.
+        held = {_norm_q(p.question) for p in load_source("math500")}
+        return [Problem(p.id.replace("math-test-", "math-val-"), p.question, p.answer, p.solution)
+                for p in load_source("math:test") if _norm_q(p.question) not in held]
     if spec.startswith("math:"):
         # MATH train/test (Hendrycks). MATH-500 is drawn from the test split, so math:train is
         # the leak-free practice set for a math500 eval, as in the paper.
@@ -69,12 +81,16 @@ def load_source(spec: str) -> list[Problem]:
             for i, r in enumerate(ds):
                 ans = _last_boxed(r["solution"])
                 if ans is not None:
-                    out.append(Problem(f"math-{split}-{subj}-{i}", r["problem"], ans))
+                    out.append(Problem(f"math-{split}-{subj}-{i}", r["problem"], ans, r["solution"]))
         return out
     if spec == "math500":
         ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
         return [Problem(r.get("unique_id", f"math500-{i}"), r["problem"], r["answer"]) for i, r in enumerate(ds)]
     raise ValueError(f"unknown problem source {spec!r}")
+
+
+def _norm_q(q: str) -> str:
+    return re.sub(r"\s+", " ", q).strip()
 
 
 # -------------------------------------------------------------------- grading

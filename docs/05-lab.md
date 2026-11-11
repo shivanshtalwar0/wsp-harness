@@ -116,7 +116,44 @@ thinking-mode generations on a laptop are slow; `--max-new-tokens` caps practice
 - **activations**: mean |activation| from the last `forward_read` that captured `mlp_act`;
 - click a neuron to see its write norm, edit state, last activation, and the tokens its column
   promotes and suppresses (logit lens);
-- the right panel streams every analyst call and note, plus the pass budget.
+- the right panel streams every analyst call and note, the pass budget, the running tool, and
+  the per-edit validation chart;
+- updates are pushed over server-sent events (`/viz/stream`), edits are sent sparse, colors come
+  from a lookup table, and no viewer request waits on the model during a forward pass.
+
+## Per-edit validation
+
+`wsp/lab/validate.py`. Every call that can change weights (`python`, `apply_patch`, `restore`)
+is followed by a fingerprint check: the changed tensors and their checksums. If the state is new,
+the weights version (`wver`) increments, the viewer's edit map is recomputed immediately, and a
+background worker re-scores the validation items once the model is free. A burst of edits
+results in one validation of the latest state. States seen before, including `restore("base")`,
+reuse their cached result.
+
+- **Split:** `--val math:val` is MATH test minus every MATH-500 problem (4,500 items), so it is
+  disjoint from both practice and the final test. `--val-n` items (default 128) are fixed for
+  the whole session.
+- **Signal:** per-item mean token loss of the reference solution given the problem. The lab
+  computes the paired difference vs base, its 95% interval, and a verdict (better / worse /
+  inconclusive), plus counts of items improved and worsened. `--val-gen-n N` adds greedy
+  generation on N items, reported as paired wins/losses with an exact sign test.
+- **Visibility:** operator-only by default (`/admin/validation`, `python -m wsp.lab validation`,
+  the viewer). `--val-visible` lets the analyst read it through the `validation` tool. Do that
+  only if you accept that the validation split then becomes part of its search.
+- **Cost:** on CPU with the tiny model, 128 items took ~4 s. On Qwen3-4B it is one teacher-forced
+  pass over 128 solutions; it never spends the analyst's budget, but the analyst's next call
+  waits while it runs.
+
+## Speed options
+
+See the table in the README. In short: length-sorted batching everywhere; on CUDA, an automatic
+batch size of 64, TF32, FlashAttention-2 when installed, optional `--compile` (static cache +
+`torch.compile`), and the experimental `--gen-backend vllm`. With vLLM, all generation
+(practice passes, validation generation, operator eval) goes through `Lab._gen`, which first
+calls `VLLMEngine.sync`. That pushes, via `collective_rpc` into a vLLM worker extension calling
+`model.load_weights`, only the tensors whose checksum changed since the last push, and pushes
+base values back for tensors that were restored. Steering calls use the HF path, because they
+need forward hooks.
 
 ## Demo round and the Pages site
 

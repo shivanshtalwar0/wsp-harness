@@ -208,6 +208,7 @@ def generate(
     batch_size: int = 16,
     seed: int = 0,
     steer: list[dict] | None = None,
+    static_cache: bool = False,
 ) -> list[dict]:
     tok = lm.tok
     tok.padding_side = "left"
@@ -216,31 +217,80 @@ def generate(
     eos_ids = set(eos_ids if isinstance(eos_ids, list) else [eos_ids]) - {None}
     eos_ids.add(tok.eos_token_id)
     torch.manual_seed(seed)
-    results: list[dict] = []
+    order = _by_length(tok, texts)            # batch similar lengths: less padding, faster
+    results: list[dict | None] = [None] * len(texts)
     with hooks(lm, [], {}, steer):
         for i in range(0, len(texts), batch_size):
-            chunk = texts[i : i + batch_size]
+            idx = order[i : i + batch_size]
+            chunk = [texts[j] for j in idx]
             enc = tok(chunk, return_tensors="pt", padding=True).to(lm.device)
             kw = dict(max_new_tokens=max_new_tokens, pad_token_id=tok.pad_token_id)
+            if static_cache:
+                # static KV cache lets transformers torch.compile the decode step (CUDA graphs).
+                # In-place weight edits keep tensor addresses, so compiled graphs stay valid.
+                kw["cache_implementation"] = "static"
             if temperature > 0:
                 kw.update(do_sample=True, temperature=temperature, top_p=top_p)
             else:
                 kw.update(do_sample=False, temperature=None, top_p=None, top_k=None)
             out = lm.model.generate(**enc, **kw)
             gen = out[:, enc["input_ids"].shape[1] :].tolist()
-            for row in gen:
+            for j, row in zip(idx, gen):
                 cut = next((j for j, t in enumerate(row) if t in eos_ids), None)
                 ids = row if cut is None else row[:cut]
                 ids = [t for t in ids if t != tok.pad_token_id]
-                results.append(
-                    {
-                        "completion": tok.decode(ids, skip_special_tokens=True),
-                        "n_tokens": len(ids),
-                        "hit_limit": cut is None,
-                        "repetition": round(repetition(ids), 3),
-                    }
-                )
-    return results
+                results[j] = {
+                    "completion": tok.decode(ids, skip_special_tokens=True),
+                    "n_tokens": len(ids),
+                    "hit_limit": cut is None,
+                    "repetition": round(repetition(ids), 3),
+                }
+    return results  # type: ignore[return-value]
+
+
+def _by_length(tok, texts: list[str]) -> list[int]:
+    """Indices of texts, longest first (stable). Callers restore the original order."""
+    lens = [len(x) for x in tok(texts, add_special_tokens=False)["input_ids"]]
+    return sorted(range(len(texts)), key=lambda i: -lens[i])
+
+
+@torch.no_grad()
+def answer_nll(
+    lm: LoadedModel,
+    prompts: list[str],
+    answers: list[str],
+    *,
+    thinking: bool = False,
+    batch_size: int = 16,
+    max_length: int = 2048,
+) -> list[float]:
+    """Mean per-token NLL of each reference answer given its (chat-rendered) prompt.
+
+    The cheap validation signal: one teacher-forced pass, no generation. Lower is better.
+    """
+    tok = lm.tok
+    tok.padding_side = "right"
+    heads = [render_prompt(lm, p, thinking) for p in prompts]
+    full = [h + a for h, a in zip(heads, answers)]
+    head_len = [len(x) for x in tok(heads, add_special_tokens=False)["input_ids"]]
+    order = _by_length(tok, full)
+    out: list[float] = [float("nan")] * len(full)
+    for i in range(0, len(full), batch_size):
+        idx = order[i : i + batch_size]
+        enc = tok([full[j] for j in idx], return_tensors="pt", padding=True, truncation=True,
+                  max_length=max_length, add_special_tokens=False).to(lm.device)
+        logits = lm.model(**enc).logits.float()
+        logp = torch.log_softmax(logits[:, :-1], -1)
+        tgt = enc["input_ids"][:, 1:]
+        lp = logp.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
+        mask = enc["attention_mask"][:, 1:].clone().float()
+        for b, j in enumerate(idx):
+            mask[b, : max(head_len[j] - 1, 0)] = 0          # score only the answer tokens
+        n = mask.sum(1).clamp(min=1)
+        nll = -(lp * mask).sum(1) / n
+        for b, j in enumerate(idx):
+            out[j] = float(nll[b])
+    return out
 
 
 # ---------------------------------------------------------------------- reads
@@ -264,11 +314,13 @@ def read(
     tok = lm.tok
     tok.padding_side = "right"
     captures = parse_captures(capture or [], lm)
-    gathered: dict[str, list] = {}
-    per_text: list[dict] = []
+    order = _by_length(tok, texts)            # batch similar lengths; results keep input order
+    rows: dict[str, list] = {}                # key -> per-text values, input order
+    per_text: list[dict | None] = [None] * len(texts)
 
     for i in range(0, len(texts), batch_size):
-        chunk = texts[i : i + batch_size]
+        idx = order[i : i + batch_size]
+        chunk = [texts[j] for j in idx]
         enc = tok(chunk, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(lm.device)
         mask = enc["attention_mask"]
         lengths = mask.sum(1)
@@ -285,17 +337,15 @@ def read(
         last = (lengths - 1).clamp(min=0)
         last_lp = logp[torch.arange(len(chunk)), last]
         top = last_lp.topk(top_k, -1)
-        for b in range(len(chunk)):
-            per_text.append(
-                {
-                    "n_tokens": int(lengths[b]),
-                    "nll": round(float(nll[b]), 4),
-                    "next": [
-                        {"token": tok.decode([int(t)]), "id": int(t), "p": round(float(p.exp()), 4)}
-                        for t, p in zip(top.indices[b], top.values[b])
-                    ],
-                }
-            )
+        for b, j in enumerate(idx):
+            per_text[j] = {
+                "n_tokens": int(lengths[b]),
+                "nll": round(float(nll[b]), 4),
+                "next": [
+                    {"token": tok.decode([int(t)]), "id": int(t), "p": round(float(p.exp()), 4)}
+                    for t, p in zip(top.indices[b], top.values[b])
+                ],
+            }
 
         for key, parts in store.items():
             t = parts[0] if len(parts) == 1 else torch.cat(parts, 0)
@@ -307,15 +357,14 @@ def read(
                 val = ((t * mm).sum(1) / mm.sum(1)).cpu()
             else:
                 val = [t[b, : int(lengths[b])].cpu() for b in range(len(chunk))]
-            gathered.setdefault(key, []).append(val)
+            slot = rows.setdefault(key, [None] * len(texts))
+            for b, j in enumerate(idx):
+                slot[j] = val[b]
 
     acts: dict = {}
-    for key, parts in gathered.items():
-        if positions == "all":
-            acts[key] = [x for p in parts for x in p]
-        else:
-            acts[key] = torch.cat(parts, 0)
-    return per_text, acts
+    for key, vals in rows.items():
+        acts[key] = vals if positions == "all" else torch.stack(vals, 0)
+    return per_text, acts  # type: ignore[return-value]
 
 
 def describe_acts(acts: dict) -> dict:

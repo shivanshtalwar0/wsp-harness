@@ -37,14 +37,25 @@ def main(argv=None) -> int:
     s.add_argument("--max-generate", type=int, default=512)
     s.add_argument("--max-read", type=int, default=1024)
     s.add_argument("--max-new-tokens", type=int, default=2048)
-    s.add_argument("--batch-size", type=int, default=16)
+    s.add_argument("--batch-size", type=int, default=0, help="0 = auto (64 on CUDA, 16 otherwise)")
     s.add_argument("--practice", default="math:train", help="math:train | gsm8k:train | jsonl:<path> | toy")
     s.add_argument("--eval", default="math500", help="math500 | gsm8k:test | math:test | jsonl:<path> | toy")
     s.add_argument("--thinking", action="store_true", help="Qwen3 thinking mode for generations")
     s.add_argument("--run-dir", default="runs/lab")
     s.add_argument("--base-device", default=None, help="'cpu' keeps the pristine copy off the accelerator")
+    s.add_argument("--val", default="math:val", help="per-edit validation split (disjoint from --eval)")
+    s.add_argument("--val-n", type=int, default=128, help="validation items for paired answer-NLL; 0 disables")
+    s.add_argument("--val-gen-n", type=int, default=0, help="also generate+grade this many per weight state")
+    s.add_argument("--val-visible", action="store_true", help="let the analyst see validation results")
+    s.add_argument("--attn", default="auto", choices=["auto", "sdpa", "eager", "flash_attention_2"])
+    s.add_argument("--compile", action="store_true", help="static KV cache + torch.compile (CUDA)")
+    s.add_argument("--gen-backend", default="hf", choices=["hf", "vllm"],
+                   help="vllm: CUDA-only fast generation with live weight sync (experimental)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
+
+    v = sub.add_parser("validation", help="per-edit validation history (operator)")
+    v.add_argument("--url", default=DEFAULT_URL)
 
     e = sub.add_parser("eval", help="held-out evaluation (operator only)")
     e.add_argument("--url", default=DEFAULT_URL)
@@ -78,7 +89,9 @@ def main(argv=None) -> int:
             model_id=a.model, device=a.device, dtype=a.dtype, budget=a.budget,
             max_generate=a.max_generate, max_read=a.max_read, max_new_tokens=a.max_new_tokens,
             batch_size=a.batch_size, practice=a.practice, eval=a.eval, thinking=a.thinking,
-            run_dir=a.run_dir, base_device=a.base_device,
+            run_dir=a.run_dir, base_device=a.base_device, val=a.val, val_n=a.val_n,
+            val_gen_n=a.val_gen_n, val_visible=a.val_visible, attn=a.attn, compile=a.compile,
+            gen_backend=a.gen_backend,
         )
         print(f"loading {cfg.model_id} ...", file=sys.stderr)
         lab = Lab(cfg)
@@ -88,6 +101,8 @@ def main(argv=None) -> int:
     if a.cmd == "eval":
         return _admin(a.url, "evaluate", {"n": a.n, "seed": a.seed, "checkpoint": a.checkpoint,
                                           "split": a.split, "max_new_tokens": a.max_new_tokens})
+    if a.cmd == "validation":
+        return _admin(a.url, "validation", {})
     if a.cmd == "export":
         return _admin(a.url, "export", {"out_dir": a.out, "full_model": a.full_model})
     if a.cmd == "budget":

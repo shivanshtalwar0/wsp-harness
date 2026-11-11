@@ -12,6 +12,9 @@ const S = {
   head: null,      // Float32Array [layers * heads]
   nEvents: 0,
   selected: null,
+  wver: 0,
+  actsVer: 0,
+  loaded: {},      // mode -> versions last drawn
 };
 
 const MODE_HELP = {
@@ -173,6 +176,18 @@ function ramp(stops, t) {
   return stops[i].clone().lerp(stops[i + 1], t - i);
 }
 
+// 256-entry color tables per mode: recoloring 350k points is a table lookup, not 350k allocations
+const LUT_N = 256;
+const LUTS = Object.fromEntries(Object.entries(RAMPS).map(([k, stops]) => {
+  const t = new Float32Array(LUT_N * 3);
+  for (let i = 0; i < LUT_N; i++) {
+    const c = ramp(stops, i / (LUT_N - 1));
+    t[i * 3] = c.r; t[i * 3 + 1] = c.g; t[i * 3 + 2] = c.b;
+  }
+  return [k, t];
+}));
+const SEL = C(0xff3b6b);
+
 function quantiles(arr, qs) {
   const nz = [];
   const step = Math.max(1, Math.floor(arr.length / 60000));
@@ -204,26 +219,36 @@ function recolor() {
   const col = geo.attributes.color.array;
   const size = geo.attributes.size.array;
   const stops = RAMPS[S.mode];
+  const lut = LUTS[S.mode];
   const map = mapper(S.mlp, S.mode);
   const g = 1 / S.gain;
   const cell = layout.cell;
+  const live = S.mode !== "weights";
+  const edits = S.mode === "edits";
+  const dimS = cell * 0.45, dr = DIM.r, dg = DIM.g, db = DIM.b;
+  const mlp = S.mlp;
   for (let l = 0; l < L; l++) {
     const vis = l >= S.lo && l <= S.hi;
+    const off = l * I;
     for (let i = 0; i < I; i++) {
-      const p = l * I + i;
-      const v = S.mlp[p];
-      let c, s;
-      if (!vis) { s = 0; c = DIM; }
-      else if (S.mode !== "weights" && v === 0) { c = DIM; s = cell * 0.45; }
-      else {
-        const t = Math.pow(Math.min(Math.max(map(v), 0), 1), g);
-        c = ramp(stops, t);
-        s = S.mode === "edits" ? cell * (3.2 + 2.5 * t) : cell * (0.5 + 0.7 * t);
+      const p = off + i, k = p * 3;
+      const v = mlp[p];
+      if (!vis || (live && v === 0)) {
+        col[k] = dr; col[k + 1] = dg; col[k + 2] = db;
+        size[p] = vis ? dimS : 0;
+        continue;
       }
-      if (S.selected === p) { c = C(0xff3b6b); s = cell * 2.4; }
-      col[p * 3] = c.r; col[p * 3 + 1] = c.g; col[p * 3 + 2] = c.b;
-      size[p] = s;
+      let t = map(v);
+      t = t <= 0 ? 0 : t >= 1 ? 1 : (g === 1 ? t : Math.pow(t, g));
+      const j = ((t * (LUT_N - 1)) | 0) * 3;
+      col[k] = lut[j]; col[k + 1] = lut[j + 1]; col[k + 2] = lut[j + 2];
+      size[p] = edits ? Math.min(cell * (3.2 + 2.5 * t), Math.max(cell * 1.3, 2.2)) : cell * (0.5 + 0.7 * t);
     }
+  }
+  if (S.selected != null && S.selected < mlp.length) {
+    const k = S.selected * 3;
+    col[k] = SEL.r; col[k + 1] = SEL.g; col[k + 2] = SEL.b;
+    size[S.selected] = cell * 2.4;
   }
   geo.attributes.color.needsUpdate = true;
   geo.attributes.size.needsUpdate = true;
@@ -256,7 +281,38 @@ function f32(b64) {
   return new Float32Array(buf.buffer);
 }
 
+function i32(b64) {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return new Int32Array(buf.buffer);
+}
+
+function denseMlp(d) {
+  if (d.mlp) return f32(d.mlp);
+  const out = new Float32Array(d.layers * d.neurons);   // sparse: only edited neurons are sent
+  if (d.sparse_idx) {
+    const idx = i32(d.sparse_idx), val = f32(d.sparse_val);
+    for (let n = 0; n < idx.length; n++) out[idx[n]] = val[n];
+  }
+  return out;
+}
+
+let loading = null;
 async function loadLayers() {
+  if (loading) { loading.again = true; return loading.p; }   // coalesce bursts of updates
+  loading = { again: false };
+  loading.p = (async () => {
+    do {
+      loading.again = false;
+      await loadLayersOnce();
+    } while (loading.again);
+  })();
+  try { await loading.p; } finally { loading = null; }
+}
+
+async function loadLayersOnce() {
+  const t0 = performance.now();
   const d = await api.layers(S.mode);
   const first = !S.meta;
   if (first || S.meta.layers !== d.layers || S.meta.neurons !== d.neurons) {
@@ -266,10 +322,12 @@ async function loadLayers() {
     for (const id of ["lo", "hi"]) { $(id).max = d.layers - 1; }
     $("lo").value = 0; $("hi").value = d.layers - 1;
   }
-  S.mlp = f32(d.mlp);
+  S.mlp = denseMlp(d);
   S.head = f32(d.head);
   S.stale = !!d.busy;   // lab was mid-pass: re-fetch when it frees up
+  S.loaded[S.mode] = { wver: d.wver, acts: d.acts_ver };
   recolor();
+  S.lastLoadMs = Math.round(performance.now() - t0);
 }
 
 function fmtSecs(t) {
@@ -282,40 +340,92 @@ function esc(s) {
 
 const EDIT_TOOLS = new Set(["apply_patch", "restore", "python"]);
 
+function needsReload(st) {
+  if (STATIC || S.mode === "weights") return false;
+  const have = S.loaded[S.mode] || {};
+  if (S.mode === "edits") return st.wver !== have.wver;
+  return st.acts_ver !== have.acts;
+}
+
+async function handleState(st) {
+  $("model").textContent = `${st.model_id} · ${st.session}`;
+  const b = st.budget;
+  $("budget-text").textContent = `${b.used} / ${b.total}`;
+  $("budget-bar").style.width = `${(100 * b.used) / Math.max(1, b.total)}%`;
+  $("n-events").textContent = `${st.n_events} calls`;
+  $("status").textContent = st.running ? `running ${st.running.tool} · ${fmtSecs(st.running.secs)}` : "";
+  const fresh = st.events || [];
+  if (fresh.length) {
+    const ol = $("events");
+    for (const ev of fresh) {
+      const li = document.createElement("li");
+      const isErr = typeof ev.result === "string" && ev.result.startsWith('{"error"');
+      li.innerHTML = `<span class="tool ${EDIT_TOOLS.has(ev.tool) ? "edit" : ""} ${ev.tool === "validate" ? "val" : ""}">${esc(ev.tool)}</span>
+        <span class="muted">${esc(ev.t.slice(11))} · ${ev.secs}s</span>
+        ${isErr ? `<span class="err"> error</span>` : ""}
+        <span class="args">${esc(ev.args)}</span>`;
+      ol.prepend(li);
+    }
+    while (ol.children.length > 80) ol.lastChild.remove();
+  }
+  S.nEvents = st.n_events;
+  S.wver = st.wver ?? S.wver;
+  S.actsVer = st.acts_ver ?? S.actsVer;
+  $("notes").innerHTML = (st.notes || [])
+    .slice()
+    .reverse()
+    .map((n) => `<li><span class="kind">${esc(n.kind)}</span>${esc(n.text)}</li>`)
+    .join("");
+  renderValidation(st.validation);
+  if (needsReload(st) || (S.stale && !st.running && !STATIC)) await loadLayers();
+}
+
+const DIR_COLOR = { better: "#3fbf7f", worse: "#ff6b6b", inconclusive: "#7d8899", base: "#5ac8fa" };
+
+function renderValidation(hist) {
+  const box = $("val");
+  if (!hist || !hist.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const last = hist[hist.length - 1];
+  const fmt = (x) => (x >= 0 ? "+" : "") + x.toFixed(4);
+  const W = 320, H = 54, n = hist.length, bw = Math.max(3, Math.min(14, (W - 4) / n - 2));
+  const m = Math.max(1e-6, ...hist.map((r) => Math.max(Math.abs(r.d_nll_ci95?.[0] ?? 0), Math.abs(r.d_nll_ci95?.[1] ?? 0))));
+  const y = (v) => H / 2 + (v / m) * (H / 2 - 3);    // up = worse (higher loss), down = better
+  const bars = hist.map((r, i) => {
+    const x = 2 + i * (bw + 2);
+    const [lo, hi] = r.d_nll_ci95 || [0, 0];
+    const c = DIR_COLOR[r.direction] || "#7d8899";
+    return `<line x1="${x + bw / 2}" x2="${x + bw / 2}" y1="${y(lo)}" y2="${y(hi)}" stroke="${c}" stroke-opacity="0.45"/>
+      <rect x="${x}" y="${Math.min(y(0), y(r.d_nll))}" width="${bw}" height="${Math.max(1, Math.abs(y(r.d_nll) - y(0)))}" fill="${c}">
+      <title>wver ${r.wver}: Δnll ${fmt(r.d_nll)} [${fmt(lo)}, ${fmt(hi)}] ${r.direction}</title></rect>`;
+  }).join("");
+  const gen = last.gen_n ? ` · gen ${last.gen_wins}↑ ${last.gen_losses}↓ (p ${last.gen_sign_p})` : "";
+  $("val-body").innerHTML = `
+    <div class="val-head"><span style="color:${DIR_COLOR[last.direction]}">${esc(last.direction)}</span>
+      <span class="mono small">weights v${last.wver} · Δnll ${fmt(last.d_nll)} [${fmt(last.d_nll_ci95[0])}, ${fmt(last.d_nll_ci95[1])}]</span></div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
+      <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="#1d2430"/>${bars}</svg>
+    <div class="muted small mono">${last.n} items · ${last.items_improved}↓loss ${last.items_worsened}↑loss${gen}</div>`;
+}
+
 async function poll() {
   try {
-    const st = await api.state(S.nEvents);
-    $("model").textContent = `${st.model_id} · ${st.session}`;
-    const b = st.budget;
-    $("budget-text").textContent = `${b.used} / ${b.total}`;
-    $("budget-bar").style.width = `${(100 * b.used) / Math.max(1, b.total)}%`;
-    $("n-events").textContent = `${st.n_events} calls`;
-    $("status").textContent = st.running ? `running ${st.running.tool} · ${fmtSecs(st.running.secs)}` : "";
-    if (!st.running && S.stale && !STATIC) await loadLayers();
-    const fresh = st.events;
-    if (fresh.length) {
-      const ol = $("events");
-      for (const ev of fresh) {
-        const li = document.createElement("li");
-        const isErr = typeof ev.result === "string" && ev.result.startsWith('{"error"');
-        li.innerHTML = `<span class="tool ${EDIT_TOOLS.has(ev.tool) ? "edit" : ""}">${esc(ev.tool)}</span>
-          <span class="muted">${esc(ev.t.slice(11))} · ${ev.secs}s</span>
-          ${isErr ? `<span class="err"> error</span>` : ""}
-          <span class="args">${esc(ev.args)}</span>`;
-        ol.prepend(li);
-      }
-      while (ol.children.length > 80) ol.lastChild.remove();
-      S.nEvents = st.n_events;
-      if (S.mode !== "weights" && !STATIC) await loadLayers();
-    }
-    $("notes").innerHTML = st.notes
-      .slice()
-      .reverse()
-      .map((n) => `<li><span class="kind">${esc(n.kind)}</span>${esc(n.text)}</li>`)
-      .join("");
+    await handleState(await api.state(S.nEvents));
   } catch (e) {
     $("model").textContent = "lab unreachable";
   }
+}
+
+// Live lab: the server pushes state over SSE the moment anything changes; polling is the fallback.
+function connectStream() {
+  const es = new EventSource(`viz/stream?since=${S.nEvents}`);
+  let chain = Promise.resolve();
+  es.onmessage = (m) => { const st = JSON.parse(m.data); chain = chain.then(() => handleState(st)); };
+  es.onerror = () => {
+    es.close();
+    $("status").textContent = "reconnecting…";
+    setTimeout(connectStream, 1500);
+  };
 }
 
 // ------------------------------------------------------------- picking
@@ -376,7 +486,7 @@ for (const btn of document.querySelectorAll("#modes button")) {
     document.querySelectorAll("#modes button").forEach((b) => b.classList.toggle("on", b === btn));
     S.mode = btn.dataset.mode;
     $("mode-help").textContent = MODE_HELP[S.mode];
-    await loadLayers();
+    await loadLayers();     // server answers from its per-version cache
   });
 }
 $("mode-help").textContent = MODE_HELP[S.mode];
@@ -402,8 +512,9 @@ resize();
 await poll();          // never blocks: the header and activity feed show up immediately
 await loadLayers();
 hud();
-if (!STATIC) setInterval(poll, 2000);
-else $("replay").classList.remove("hidden");
+if (STATIC) $("replay").classList.remove("hidden");
+else if (window.EventSource) connectStream();
+else setInterval(poll, 1000);
 window.wspViewer = { S, inspect, loadLayers, camera, controls,
   setMode: (m) => document.querySelector(`#modes button[data-mode="${m}"]`).click() };
 renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });

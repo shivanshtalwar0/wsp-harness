@@ -67,3 +67,7 @@ ol { list-style: none; margin: 0; padding: 0; }
 
 .replay { margin-top: 8px; padding: 6px 8px; border: 1px solid #3a2a10; background: #1b140a; color: #f3c27a; border-radius: 6px; }
 .replay a { color: var(--accent); }
+
+#events .tool.val { color: #3fbf7f; }
+.val-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; font-weight: 600; }
+#val svg { display: block; margin: 4px 0; background: #0a0d12; border-radius: 4px; }
