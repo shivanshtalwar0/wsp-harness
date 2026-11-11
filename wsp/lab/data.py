@@ -126,11 +126,21 @@ def extract_answer(text: str) -> str | None:
     return nums[-1] if nums else None
 
 
+_UNITS = ("\\$", "$", "\\%", "%", "^\\circ", "^{\\circ}", "°", "\\,", "\\;", "\\:", "\\!", "\\ ", "~")
+
+
 def _normalize(s: str) -> str:
-    s = s.strip().strip("$").replace(",", "").replace("\\!", "").replace(" ", "")
+    """Formatting-only normalization: currency/percent/degree marks, LaTeX spacing, \\text{},
+    \\dfrac/\\tfrac, and a parenthesised choice letter. Numeric comparison is unchanged."""
+    s = s.strip()
     s = re.sub(r"\\text\{([^}]*)\}", r"\1", s)
-    s = s.replace("\\dfrac", "\\frac").replace("\\left", "").replace("\\right", "")
-    return s.rstrip(".")
+    for u in _UNITS:
+        s = s.replace(u, "")
+    s = s.replace(",", "").replace(" ", "")
+    s = s.replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac").replace("\\left", "").replace("\\right", "")
+    s = s.rstrip(".")
+    m = re.fullmatch(r"\(([A-Ea-e])\)", s)          # "(A)" vs "A"
+    return m.group(1).upper() if m else s
 
 
 def _as_float(s: str) -> float | None:

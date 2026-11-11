@@ -254,6 +254,30 @@ def _by_length(tok, texts: list[str]) -> list[int]:
     return sorted(range(len(texts)), key=lambda i: -lens[i])
 
 
+LOGIT_CHUNK = 512   # positions per vocab projection: [512, 151936] fp32 = 311 MB worst case
+
+
+def _hidden(lm: LoadedModel, enc) -> torch.Tensor:
+    """Final hidden states [B, L, H] (after the final norm), without the vocab projection.
+
+    Projecting a whole batch onto a 151,936-token vocabulary at once is [B, L, V]: gigabytes,
+    and past MPS's per-tensor limit for a 16 x 800 batch. Callers project only the positions
+    they need, in chunks.
+    """
+    return lm.model.get_decoder()(**enc).last_hidden_state
+
+
+def _span_logprobs(head, h: torch.Tensor, ids: torch.Tensor, start: int, end: int) -> torch.Tensor:
+    """log p(ids[t+1] | ids[..t]) for t in [start, end-1), computed in LOGIT_CHUNK slices."""
+    parts = []
+    for a in range(start, end - 1, LOGIT_CHUNK):
+        b = min(a + LOGIT_CHUNK, end - 1)
+        lg = head(h[a:b]).float()
+        tgt = ids[a + 1 : b + 1].unsqueeze(-1)
+        parts.append(lg.gather(-1, tgt).squeeze(-1) - torch.logsumexp(lg, -1))
+    return torch.cat(parts) if parts else h.new_zeros(0, dtype=torch.float32)
+
+
 @torch.no_grad()
 def answer_nll(
     lm: LoadedModel,
@@ -279,17 +303,13 @@ def answer_nll(
         idx = order[i : i + batch_size]
         enc = tok([full[j] for j in idx], return_tensors="pt", padding=True, truncation=True,
                   max_length=max_length, add_special_tokens=False).to(lm.device)
-        logits = lm.model(**enc).logits.float()
-        logp = torch.log_softmax(logits[:, :-1], -1)
-        tgt = enc["input_ids"][:, 1:]
-        lp = logp.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-        mask = enc["attention_mask"][:, 1:].clone().float()
+        h = _hidden(lm, enc)
+        head = lm.model.get_output_embeddings()
+        lengths = enc["attention_mask"].sum(1)
         for b, j in enumerate(idx):
-            mask[b, : max(head_len[j] - 1, 0)] = 0          # score only the answer tokens
-        n = mask.sum(1).clamp(min=1)
-        nll = -(lp * mask).sum(1) / n
-        for b, j in enumerate(idx):
-            out[j] = float(nll[b])
+            # positions head_len-1 .. L-2 predict the answer tokens head_len .. L-1
+            lp = _span_logprobs(head, h[b], enc["input_ids"][b], max(head_len[j] - 1, 0), int(lengths[b]))
+            out[j] = float(-lp.mean()) if lp.numel() else float("nan")
     return out
 
 
@@ -326,16 +346,18 @@ def read(
         lengths = mask.sum(1)
         store: dict[str, list] = {}
         with hooks(lm, captures, store, steer):
-            logits = lm.model(**enc).logits.float()
+            h = _hidden(lm, enc)
 
-        # per-text loss and next-token prediction at the last real position
-        logp = torch.log_softmax(logits, -1)
+        # per-text loss and next-token prediction at the last real position, projecting onto
+        # the vocabulary only in chunks (never a [B, L, V] tensor)
+        head = lm.model.get_output_embeddings()
         ids = enc["input_ids"]
-        tgt_lp = logp[:, :-1].gather(-1, ids[:, 1:].unsqueeze(-1)).squeeze(-1)
-        m = mask[:, 1:].float()
-        nll = -(tgt_lp * m).sum(1) / m.sum(1).clamp(min=1)
         last = (lengths - 1).clamp(min=0)
-        last_lp = logp[torch.arange(len(chunk)), last]
+        nll = torch.zeros(len(chunk))
+        for b in range(len(chunk)):
+            lp = _span_logprobs(head, h[b], ids[b], 0, int(lengths[b]))
+            nll[b] = -lp.mean() if lp.numel() else 0.0
+        last_lp = torch.log_softmax(head(h[torch.arange(len(chunk)), last]).float(), -1)
         top = last_lp.topk(top_k, -1)
         for b, j in enumerate(idx):
             per_text[j] = {

@@ -254,6 +254,14 @@ def test_mcp_server_exposes_only_analyst_tools():
         ("I think it is 7, no wait, 8", "8", True),
         ("\\boxed{17}", "18", False),
         ("no number here", "3", False),
+        # formatting-only differences the first Opus run found being marked wrong
+        ("\\boxed{1500}", "\\$ 1500", True),
+        ("\\boxed{2.75}", "\\$2.75", True),
+        ("\\boxed{A}", "(A)", True),
+        ("\\boxed{25\\%}", "25", True),
+        ("\\boxed{90^\\circ}", "90", True),
+        ("\\boxed{1501}", "\\$ 1500", False),
+        ("\\boxed{A}", "(B)", False),
     ],
 )
 def test_grading(text, answer, ok):
@@ -457,3 +465,24 @@ def test_batch_size_auto_and_attn_choice(tmp_path):
     assert lab.cfg.batch_size == 16                           # CPU/MPS default
     assert pick_attn("auto", "cpu", torch.bfloat16) == "sdpa"
     assert pick_attn("eager", "cuda", torch.bfloat16) == "eager"
+
+
+def test_chunked_scoring_matches_full_logits(lab):
+    """The chunked vocab projection must give the same numbers as the naive full-logits path."""
+    from wsp.lab import forward as fw
+
+    lab.lm.tok.padding_side = "right"
+    texts = ["short one", "a considerably longer text that spans more tokens than the first"]
+    enc = lab.lm.tok(texts, return_tensors="pt", padding=True)
+    with torch.no_grad():
+        logp = torch.log_softmax(lab.lm.model(**enc).logits.float(), -1)
+    ids, m = enc["input_ids"], enc["attention_mask"]
+    ref = -(logp[:, :-1].gather(-1, ids[:, 1:, None]).squeeze(-1) * m[:, 1:]).sum(1) / m[:, 1:].sum(1)
+    old = fw.LOGIT_CHUNK
+    fw.LOGIT_CHUNK = 7                        # force several chunks per sequence
+    try:
+        per_text, _ = fw.read(lab.lm, texts)
+    finally:
+        fw.LOGIT_CHUNK = old
+    for r, want in zip(per_text, ref.tolist()):
+        assert r["nll"] == pytest.approx(want, abs=2e-4)

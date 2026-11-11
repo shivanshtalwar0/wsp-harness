@@ -94,7 +94,7 @@ class Lab:
         self._val_pending = threading.Event()
         if cfg.val_n > 0:
             self.validator = Validator(
-                self.lm, ValConfig(cfg.val, cfg.val_n, cfg.val_gen_n, min(cfg.max_new_tokens, 1024)),
+                self.lm, ValConfig(cfg.val, cfg.val_n, cfg.val_gen_n, cfg.max_new_tokens),
                 thinking=cfg.thinking, batch_size=cfg.batch_size, gen_fn=self._gen)
             t0 = time.time()
             rec = self.validator.set_base()

@@ -58,6 +58,21 @@ const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
+// Render on demand, not every frame: on Apple Silicon the viewer shares the GPU with the model,
+// and a continuous 60 fps loop over 350k points measurably slows generation passes.
+let renderPending = false;
+function requestRender() {
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => {
+    renderPending = false;
+    const moving = controls.update();      // true while damping is still settling
+    renderer.render(scene, camera);
+    if (moving) requestRender();
+  });
+}
+controls.addEventListener("change", requestRender);
+
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const sun = new THREE.DirectionalLight(0xffffff, 0.8);
 sun.position.set(40, 120, 60);
@@ -95,6 +110,7 @@ function resize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   pointMat.uniforms.scale.value = h / (2 * Math.tan((camera.fov * Math.PI) / 360));
+  requestRender();
 }
 addEventListener("resize", resize);
 
@@ -271,6 +287,7 @@ function recolor() {
     heads.instanceMatrix.needsUpdate = true;
   }
   $("layer-range").textContent = `showing layers ${S.lo}–${S.hi} of ${L}`;
+  requestRender();
 }
 
 // ------------------------------------------------------------------ data
@@ -517,4 +534,4 @@ else if (window.EventSource) connectStream();
 else setInterval(poll, 1000);
 window.wspViewer = { S, inspect, loadLayers, camera, controls,
   setMode: (m) => document.querySelector(`#modes button[data-mode="${m}"]`).click() };
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+requestRender();
